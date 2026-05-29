@@ -217,6 +217,25 @@ def test_build_returns_result_and_tax():
     assert set(tax) == {"claude-code", "codex"}
 
 
+def test_load_asymmetry_suppressed_by_ssotyignore():
+    a = RuleDoc(harness="claude-code", name="x.md", path=Path("a/x.md"), load_basis=ALWAYS_ON, text="t")
+    b = RuleDoc(harness="codex", name="x.md", path=Path("b/x.md"), load_basis=SKILL_GATED, text="t")
+    surfaces = {
+        "claude-code": HarnessSurface("claude-code", [a]),
+        "codex": HarnessSurface("codex", [b]),
+    }
+    plain = [
+        f for f in run_checks(CheckContext(surfaces=surfaces, ignore=SsotyIgnore())) if f.check == "load_asymmetry"
+    ]
+    assert plain and all(f.severity is Severity.WARNING for f in plain)
+    ignored = [
+        f
+        for f in run_checks(CheckContext(surfaces=surfaces, ignore=SsotyIgnore(names={"x.md"})))
+        if f.check == "load_asymmetry"
+    ]
+    assert ignored and all(f.severity is Severity.FYI for f in ignored)
+
+
 def test_cli_resolve_text_lists_load_basis(capsys):
     assert main(["resolve", str(MESSY)]) == 0
     out = capsys.readouterr().out

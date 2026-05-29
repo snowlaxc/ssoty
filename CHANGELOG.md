@@ -16,6 +16,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](ht
 - `dangling_cross_ref` now distinguishes genuine cross-boundary breaks (Critical)
   from intentional non-sharing declared in `.ssotyignore` (FYI).
 - `referenced_docs` ignores placeholder/glob tokens (`<topic>.md`, `*.md`).
+- `.ssotyignore` also downgrades intentional `load_asymmetry` to FYI.
 - Cross-harness identical content is FYI (expected sharing); only within-harness
   duplication is a Warning.
 

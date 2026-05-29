@@ -103,13 +103,17 @@ def check_load_asymmetry(ctx: CheckContext) -> list[Finding]:
         distinct = set(per_harness.values())
         if len(per_harness) >= 2 and len(distinct) > 1:
             detail = ", ".join(f"{h}={b}" for h, b in sorted(per_harness.items()))
+            if ctx.ignore.declares(name):
+                sev, note = Severity.FYI, " (intentional per .ssotyignore)"
+            else:
+                sev, note = Severity.WARNING, ""
             out.append(
                 Finding(
-                    Severity.WARNING,
+                    sev,
                     "load_asymmetry",
                     "+".join(sorted(per_harness)),
                     name,
-                    f"same rule loads differently per harness ({detail}) — shared file, " f"unequal guarantee",
+                    f"same rule loads differently per harness ({detail}) — shared file, " f"unequal guarantee{note}",
                     name,
                 )
             )
