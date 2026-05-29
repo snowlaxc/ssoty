@@ -1,7 +1,9 @@
 name: release
 on:
   push:
-    tags: ["v*"]
+    # Full semver tags only (v1.2.3) — NOT the floating major tag (v0), so moving
+    # v0 doesn't re-trigger a duplicate publish.
+    tags: ["v*.*.*"]
 
 # PyPI publish uses OIDC Trusted Publishing (no long-lived token).
 jobs:
@@ -35,6 +37,8 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true  # a re-run on an already-published version is a no-op, not an error
 
   github-release:
     needs: pypi-publish

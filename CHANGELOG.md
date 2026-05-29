@@ -4,6 +4,9 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
+### Fixed
+- Release workflow triggers only on full semver tags (`v*.*.*`) so moving the
+  floating `v0` tag no longer starts a duplicate publish; publish is `skip-existing`.
 
 ## [0.1.3] — 2026-05-29
 ### Added
