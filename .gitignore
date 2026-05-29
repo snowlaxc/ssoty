@@ -1,0 +1,36 @@
+# --- PII / privacy guardrails (HARD INVARIANT) ---
+# .omc/ holds deep-dive specs & plans that reference the author's REAL paths,
+# filenames, and org. NEVER commit it. ssoty's whole point is not to leak config.
+.omc/
+# Local audit output quotes your real rules verbatim — never commit.
+*.ssoty.json
+*.ssoty.txt
+ssoty-report.*
+audit-output/
+*.snapshot.json
+*.local.*
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.eggs/
+
+# --- tooling ---
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+coverage.xml
+.tox/
+
+# --- editor / OS ---
+.DS_Store
+.idea/
+.vscode/
+*.swp

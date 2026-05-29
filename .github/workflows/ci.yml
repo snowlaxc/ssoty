@@ -1,0 +1,24 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history for the PII gate
+      - uses: astral-sh/setup-uv@v5
+      - name: Lint
+        run: |
+          uv run --extra dev ruff check src tests
+          uv run --extra dev black --check src tests
+      - name: Test (coverage gate 80%)
+        run: uv run --extra dev pytest --cov=ssoty --cov-fail-under=80
+      - name: PII gate
+        run: bash scripts/pii_gate.sh
+      - name: Self-dogfood smoke
+        run: uv run ssoty audit examples/clean-setup --ci

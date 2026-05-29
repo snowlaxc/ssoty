@@ -1,0 +1,27 @@
+name: ssoty
+description: Static cross-harness rule coherence audit for AI coding agents
+branding:
+  icon: link
+  color: purple
+inputs:
+  path:
+    description: Root containing .claude/.codex (default repo root)
+    required: false
+    default: "."
+  args:
+    description: Extra args passed to `ssoty audit`
+    required: false
+    default: "--ci"
+runs:
+  using: composite
+  steps:
+    - name: Install ssoty
+      shell: bash
+      run: pipx install ssoty || pip install --user ssoty
+    - name: Audit
+      shell: bash
+      env:
+        SSOTY_PATH: ${{ inputs.path }}
+        SSOTY_ARGS: ${{ inputs.args }}
+      # SSOTY_PATH is quoted; SSOTY_ARGS is intentionally word-split for flags.
+      run: ssoty audit "$SSOTY_PATH" $SSOTY_ARGS

@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ssoty"
+version = "0.1.0"
+description = "Static cross-harness rule coherence auditor for AI coding agents (Claude Code, Codex, ...)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "snowlaxc" }]
+keywords = ["agents", "claude-code", "codex", "AGENTS.md", "linter", "coherence", "ssot"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = []  # core is dependency-free + deterministic (no LLM, no network)
+
+[project.optional-dependencies]
+tiktoken = ["tiktoken>=0.5"]  # optional, more accurate token counts
+dev = ["pytest>=7", "pytest-cov>=4", "ruff>=0.4", "black>=24"]
+
+[project.scripts]
+ssoty = "ssoty.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/snowlaxc/ssoty"
+Issues = "https://github.com/snowlaxc/ssoty/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ssoty"]
+
+[tool.black]
+line-length = 120
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.coverage.run]
+source = ["ssoty"]
+branch = true

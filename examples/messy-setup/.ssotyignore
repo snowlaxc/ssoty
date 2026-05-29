@@ -1,0 +1,5 @@
+# Declares intentional non-sharing. A cross-reference to a declared doc is
+# downgraded from Critical to FYI.
+# meta-layout.md documents the Claude rules directory layout and is claude-only
+# BY DESIGN; Codex doesn't need it.
+meta-layout.md
