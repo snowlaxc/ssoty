@@ -81,11 +81,12 @@ def check_dangling_cross_ref(ctx: CheckContext) -> list[Finding]:
                 else:
                     out.append(
                         Finding(
-                            Severity.WARNING,
+                            Severity.FYI,
                             "dangling_cross_ref",
                             harness,
                             str(doc.path),
-                            f"references '{ref}', not found in any resolved harness surface",
+                            f"references '{ref}', not found in any resolved harness surface "
+                            f"(may be an external or project-local doc)",
                             doc.name,
                         )
                     )
@@ -147,21 +148,29 @@ def check_duplicate_content(ctx: CheckContext) -> list[Finding]:
             for para in _paragraphs(doc.text):
                 locations[para].add(f"{surface.harness}:{doc.name}")
     out: list[Finding] = []
-    for para, where in locations.items():
-        if len(where) >= 2:
-            dup_tokens = count_tokens(para)
-            out.append(
-                Finding(
-                    Severity.WARNING,
-                    "duplicate_content",
-                    "+".join(sorted({w.split(":", 1)[0] for w in where})),
-                    ", ".join(sorted(where)),
-                    f"identical {dup_tokens.tokens}-token block "
-                    f"({'approx' if dup_tokens.approx else 'exact'}) duplicated across "
-                    f"{len(where)} files",
-                    "",
-                )
+    for para, where in sorted(locations.items()):
+        if len(where) < 2:
+            continue
+        harnesses = {w.split(":", 1)[0] for w in where}
+        # within-harness duplication = real token rent (loaded every turn);
+        # cross-harness only = expected SSOT sharing (symlinked to both), not rent.
+        within = any(sum(1 for w in where if w.startswith(f"{h}:")) >= 2 for h in harnesses)
+        dup_tokens = count_tokens(para)
+        kind = "approx" if dup_tokens.approx else "exact"
+        if within:
+            sev, note = Severity.WARNING, "duplicated within a harness (token rent every turn)"
+        else:
+            sev, note = Severity.FYI, "shared across harnesses (expected SSOT sharing, not rent)"
+        out.append(
+            Finding(
+                sev,
+                "duplicate_content",
+                "+".join(sorted(harnesses)),
+                ", ".join(sorted(where)),
+                f"identical {dup_tokens.tokens}-token block ({kind}) {note}",
+                "",
             )
+        )
     return out
 
 

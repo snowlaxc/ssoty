@@ -102,18 +102,23 @@ def resolve_all(root: Path, specs: tuple[HarnessSpec, ...] = DEFAULT_SPECS) -> d
 _FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 _MD_LINK_RE = re.compile(r"\]\(\s*([^)\s]+?\.md)\s*\)")
 _BACKTICK_RE = re.compile(r"`([^`\n]+?\.md)`")
+# A real rule-doc filename: word chars, dot, dash only. Excludes prose
+# placeholders and globs such as `<topic>.md`, `*.md`, `<file>.md`.
+_VALID_DOC_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+\.md$")
 
 
 def referenced_docs(text: str) -> set[str]:
     """Return basenames of ``*.md`` rule docs referenced from ``text``.
 
     Looks at markdown links ``](x.md)`` and inline code ``` `x.md` ```; fenced
-    code blocks are stripped first to avoid matching example snippets.
+    code blocks are stripped first to avoid matching example snippets. Placeholder
+    and glob tokens (``<topic>.md``, ``*.md``) are rejected so they are not
+    reported as references.
     """
     body = _FENCE_RE.sub("", text)
     names: set[str] = set()
     for match in _MD_LINK_RE.findall(body) + _BACKTICK_RE.findall(body):
         name = match.replace("\\", "/").rsplit("/", 1)[-1].strip()
-        if name.endswith(".md"):
+        if _VALID_DOC_NAME_RE.match(name):
             names.add(name)
     return names

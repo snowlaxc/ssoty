@@ -9,7 +9,7 @@ from ssoty.checks import CheckContext, run_checks
 from ssoty.cli import build, main
 from ssoty.ignore import SsotyIgnore
 from ssoty.metrics import compute_context_tax
-from ssoty.models import ALWAYS_ON, SKILL_GATED, Severity
+from ssoty.models import ALWAYS_ON, SKILL_GATED, HarnessSurface, RuleDoc, Severity
 from ssoty.redact import redact
 from ssoty.resolver import referenced_docs, resolve_all
 from ssoty.tokens import count_tokens
@@ -38,6 +38,28 @@ def test_referenced_docs_strips_paths():
 
 def test_referenced_docs_ignores_non_md():
     assert referenced_docs("`script.py` and `notes.txt`") == set()
+
+
+def test_referenced_docs_ignores_placeholders_and_globs():
+    # prose placeholders / globs must NOT be treated as real references
+    text = "use `<topic>.md`, `*.md`, `<file>.md`, [new](<new>.md), and real `team-rules.md`"
+    assert referenced_docs(text) == {"team-rules.md"}
+
+
+def test_dangling_not_found_is_fyi_not_warning():
+    doc = RuleDoc(
+        harness="claude-code",
+        name="a.md",
+        path=Path("a.md"),
+        load_basis=ALWAYS_ON,
+        text="see `external-project-doc.md` for details",
+    )
+    ctx = CheckContext(
+        surfaces={"claude-code": HarnessSurface(harness="claude-code", docs=[doc])},
+        ignore=SsotyIgnore(),
+    )
+    dangling = [f for f in run_checks(ctx) if f.check == "dangling_cross_ref"]
+    assert dangling and all(f.severity is Severity.FYI for f in dangling)
 
 
 # --- resolver: fixture resolution ---

@@ -8,8 +8,13 @@ are deterministic (no LLM, no network).
 
 | Setup | Critical | Warning | FYI |
 |---|---|---|---|
-| `examples/messy-setup` | **2** | 3 | 6 |
+| `examples/messy-setup` | **2** | 2 | 7 |
 | `examples/clean-setup` | **0** | 0 | 5 |
+
+> Note: identical content that appears across harnesses (e.g. a rule symlinked into
+> both) is reported **FYI** (expected SSOT sharing), not Warning. Only duplication
+> *within a single harness* is token rent (Warning). Placeholder/glob references
+> (`<topic>.md`, `*.md`) are not treated as references at all.
 
 ```bash
 uvx ssoty audit examples/messy-setup    # 2 Critical (broken symlink + cross-boundary dangling)
