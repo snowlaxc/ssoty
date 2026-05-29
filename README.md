@@ -2,6 +2,7 @@
 
 **English** | [한국어](README-ko.md)
 
+[![PyPI](https://img.shields.io/pypi/v/ssoty.svg)](https://pypi.org/project/ssoty/)
 [![CI](https://github.com/snowlaxc/ssoty/actions/workflows/ci.yml/badge.svg)](https://github.com/snowlaxc/ssoty/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -87,10 +88,6 @@ Reproduce: `uvx ssoty metrics examples/messy-setup` (see [`benchmarks/REPORT.md`
 | `skill_integrity` | Warning | skill dir without a `SKILL.md` |
 
 ## Install
-
-> **Status: pre-release.** Not on PyPI yet — until `v0.1.0` is published, install
-> from GitHub: `uvx --from git+https://github.com/snowlaxc/ssoty ssoty audit`.
-> The commands below work once published (see [`RELEASING.md`](RELEASING.md)).
 
 ```bash
 # zero-install run
