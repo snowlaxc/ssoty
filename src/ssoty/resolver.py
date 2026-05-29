@@ -73,22 +73,26 @@ def _make_doc(harness: str, path: Path, load_basis: str) -> RuleDoc:
 
 def _collect(root: Path, source: Source) -> list[Path]:
     target = root / source.rel
-    # A symlink (even broken) reports is_file() False, so check the link first.
-    if target.is_symlink() or target.is_file():
-        return [target]
+    # is_dir() follows symlinks-to-dirs, so a symlinked rules directory is globbed
+    # (not collapsed into one bogus doc). Check it BEFORE the symlink/file branch.
     if target.is_dir():
         return sorted(p for p in target.glob(source.pattern) if p.is_file() or p.is_symlink())
+    # A broken symlink reports is_file()==False, so test is_symlink() too; it falls
+    # through to _make_doc which flags it broken.
+    if target.is_symlink() or target.is_file():
+        return [target]
     return []
 
 
 def resolve_surface(root: Path, spec: HarnessSpec) -> HarnessSurface:
     surface = HarnessSurface(harness=spec.harness)
-    seen: set[str] = set()
-    for source in spec.sources:
+    seen: set[str] = set()  # dedup by full path, not basename, so e.g. a rules/CLAUDE.md
+    for source in spec.sources:  # does not shadow the top-level ~/.claude/CLAUDE.md
         for path in _collect(root, source):
-            if path.name in seen:
+            key = str(path)
+            if key in seen:
                 continue
-            seen.add(path.name)
+            seen.add(key)
             surface.docs.append(_make_doc(spec.harness, path, source.load_basis))
     return surface
 
@@ -100,11 +104,12 @@ def resolve_all(root: Path, specs: tuple[HarnessSpec, ...] = DEFAULT_SPECS) -> d
 # --- cross-reference extraction ---
 
 _FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
-_MD_LINK_RE = re.compile(r"\]\(\s*([^)\s]+?\.md)\s*\)")
-_BACKTICK_RE = re.compile(r"`([^`\n]+?\.md)`")
+# Markdown link: capture the .md path, tolerating a #fragment and/or a "title".
+_MD_LINK_RE = re.compile(r'\]\(\s*([^)\s#]+?\.md)(?:#[^)\s]*)?(?:\s+"[^"]*")?\s*\)', re.IGNORECASE)
+_BACKTICK_RE = re.compile(r"`([^`\n]+?\.md)`", re.IGNORECASE)
 # A real rule-doc filename: word chars, dot, dash only. Excludes prose
 # placeholders and globs such as `<topic>.md`, `*.md`, `<file>.md`.
-_VALID_DOC_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+\.md$")
+_VALID_DOC_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+\.md$", re.IGNORECASE)
 
 
 def referenced_docs(text: str) -> set[str]:

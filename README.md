@@ -71,8 +71,8 @@ $ uvx ssoty metrics examples/messy-setup     $ uvx ssoty metrics examples/clean-
 Numbers are reported **per harness and never summed across harnesses**: `always-on`
 (actual, every turn) and `skill-gated` (potential, only when a skill fires) are
 different load guarantees. Compare *within* one harness, before vs after a cleanup.
-Token counts use `tiktoken` when installed, otherwise a clearly-labelled `char/4`
-heuristic.
+Token counts are a deterministic `char/4` heuristic by default (portable — same
+numbers on any machine); set `SSOTY_EXACT_TOKENS=1` to opt into `tiktoken`.
 
 Reproduce: `uvx ssoty metrics examples/messy-setup` (see [`benchmarks/REPORT.md`](benchmarks/REPORT.md)).
 

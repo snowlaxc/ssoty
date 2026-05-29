@@ -59,7 +59,7 @@ codex       · skill-gated: 106 →   0 tokens
 
 숫자는 **하네스별로 분리 보고하며 절대 합산하지 않습니다**. `always-on`(actual,
 매 턴)과 `skill-gated`(potential, 트리거 시)는 다른 로드 보장이라, *같은 하네스 안에서*
-정리 전/후를 비교하세요. 토큰은 `tiktoken`이 있으면 사용, 없으면 명시적 `char/4` 근사.
+정리 전/후를 비교하세요. 토큰은 기본적으로 결정적 `char/4` 근사(어느 머신에서도 같은 값); `SSOTY_EXACT_TOKENS=1`로 `tiktoken` opt-in.
 
 재현: `uvx ssoty metrics examples/messy-setup` ([`benchmarks/REPORT.md`](benchmarks/REPORT.md) 참고).
 

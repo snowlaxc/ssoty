@@ -9,7 +9,12 @@ from ssoty.metrics import HarnessTax
 from ssoty.models import AuditResult, Finding, HarnessSurface, Severity
 from ssoty.tokens import count_tokens
 
-_IDENTITY: Callable[[str], str] = lambda s: s  # noqa: E731
+
+def _identity(s: str) -> str:
+    return s
+
+
+_IDENTITY: Callable[[str], str] = _identity
 
 
 def _summary_counts(findings: list[Finding]) -> dict[str, int]:

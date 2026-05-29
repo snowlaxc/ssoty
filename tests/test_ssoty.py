@@ -248,6 +248,55 @@ def test_cli_resolve_json_parses(capsys):
     assert "claude-code" in payload and isinstance(payload["claude-code"], list)
 
 
+def test_resolve_symlinked_directory_is_globbed(tmp_path: Path):
+    # C1: a symlinked rules/references dir must be globbed, not collapsed to one doc
+    real = tmp_path / "realrefs"
+    real.mkdir()
+    (real / "x.md").write_text("x", encoding="utf-8")
+    (real / "y.md").write_text("y", encoding="utf-8")
+    refs = tmp_path / ".codex" / "skills" / "global-agent-rules"
+    refs.mkdir(parents=True)
+    (refs / "references").symlink_to(real, target_is_directory=True)
+    assert resolve_all(tmp_path)["codex"].names == {"x.md", "y.md"}
+
+
+def test_basename_does_not_shadow_top_level_claude_md(tmp_path: Path):
+    # M1: rules/CLAUDE.md must not hide the top-level ~/.claude/CLAUDE.md
+    (tmp_path / ".claude" / "rules").mkdir(parents=True)
+    (tmp_path / ".claude" / "rules" / "CLAUDE.md").write_text("rules", encoding="utf-8")
+    (tmp_path / ".claude" / "CLAUDE.md").write_text("top", encoding="utf-8")
+    docs = resolve_all(tmp_path)["claude-code"].docs
+    paths = {str(d.path) for d in docs}
+    assert any(p.endswith("/.claude/CLAUDE.md") for p in paths)
+    assert sum(1 for d in docs if d.name == "CLAUDE.md") == 2
+
+
+def test_within_doc_duplicate_is_warning():
+    # M2: the same block twice inside one always-on doc is token rent (Warning)
+    block = "acme rule " * 30  # > 200 chars after strip
+    doc = RuleDoc(
+        harness="claude-code",
+        name="a.md",
+        path=Path("a.md"),
+        load_basis=ALWAYS_ON,
+        text=block + "\n\n" + block,
+    )
+    ctx = CheckContext(surfaces={"claude-code": HarnessSurface("claude-code", [doc])}, ignore=SsotyIgnore())
+    dup = [f for f in run_checks(ctx) if f.check == "duplicate_content"]
+    assert dup and any(f.severity is Severity.WARNING for f in dup)
+
+
+def test_redact_handles_trailing_slash_home():
+    # m1: a home with a trailing slash must not eat the path separator
+    assert redact("/home/dev/x", home="/home/dev/") == "$HOME/x"
+
+
+def test_referenced_docs_handles_anchor_title_uppercase():
+    # m2: anchors, link titles, and uppercase extensions are real references
+    text = '[a](foo.md#sec) [b](bar.md "title") and `BAZ.MD`'
+    assert referenced_docs(text) == {"foo.md", "bar.md", "BAZ.MD"}
+
+
 def test_robust_on_nonexistent_root(tmp_path: Path, capsys):
     # an empty root (no .claude/.codex) must not crash; just empty surfaces
     empty = tmp_path / "nothing"

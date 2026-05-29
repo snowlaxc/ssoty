@@ -13,7 +13,7 @@ _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 
 
 def redact(text: str, home: str | None = None) -> str:
-    home = home if home is not None else os.path.expanduser("~")
+    home = (home if home is not None else os.path.expanduser("~")).rstrip("/")
     out = text
     if home and home != "/":
         out = out.replace(home, "$HOME")

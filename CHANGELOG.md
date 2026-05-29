@@ -5,6 +5,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](ht
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-05-29
+### Fixed
+- Symlinked rule *directory* is now globbed instead of collapsing into one bogus
+  doc (a whole harness surface could silently vanish). [C1]
+- PII gate matches per token, so a real email sharing a line with a synthetic one
+  no longer slips through. [C2]
+- Basename dedup no longer lets `rules/CLAUDE.md` shadow the top-level `CLAUDE.md`. [M1]
+- `duplicate_content` now detects within-doc / within-harness repetition. [M2]
+- `referenced_docs` handles `#anchors`, link `"titles"`, and uppercase `.MD`. [m2]
+- `redact` no longer drops the separator for a home path with a trailing slash. [m1]
+### Changed
+- Token counts are char/4 by default for deterministic, portable output; set
+  `SSOTY_EXACT_TOKENS=1` to opt into tiktoken for exact counts. [M3]
+
 ## [0.1.0] — 2026-05-29
 ### Added
 - Static cross-harness coherence checks: `broken_symlink`, `dangling_cross_ref`,

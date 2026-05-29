@@ -146,19 +146,20 @@ def _paragraphs(text: str) -> list[str]:
 
 
 def check_duplicate_content(ctx: CheckContext) -> list[Finding]:
-    locations: dict[str, set[str]] = defaultdict(set)
+    locations: dict[str, list[str]] = defaultdict(list)  # list, not set: count repeats
     for surface in ctx.surfaces.values():
         for doc in surface.docs:
             for para in _paragraphs(doc.text):
-                locations[para].add(f"{surface.harness}:{doc.name}")
+                locations[para].append(f"{surface.harness}:{doc.name}")
     out: list[Finding] = []
     for para, where in sorted(locations.items()):
         if len(where) < 2:
             continue
         harnesses = {w.split(":", 1)[0] for w in where}
-        # within-harness duplication = real token rent (loaded every turn);
-        # cross-harness only = expected SSOT sharing (symlinked to both), not rent.
-        within = any(sum(1 for w in where if w.startswith(f"{h}:")) >= 2 for h in harnesses)
+        # within-harness repetition (incl. the same block twice in one doc) = real
+        # token rent loaded every turn; once-per-harness across harnesses = expected
+        # SSOT sharing (e.g. symlinked to both), not rent.
+        within = any(sum(1 for w in where if w.split(":", 1)[0] == h) >= 2 for h in harnesses)
         dup_tokens = count_tokens(para)
         kind = "approx" if dup_tokens.approx else "exact"
         if within:
@@ -170,8 +171,8 @@ def check_duplicate_content(ctx: CheckContext) -> list[Finding]:
                 sev,
                 "duplicate_content",
                 "+".join(sorted(harnesses)),
-                ", ".join(sorted(where)),
-                f"identical {dup_tokens.tokens}-token block ({kind}) {note}",
+                ", ".join(sorted(set(where))),
+                f"identical {dup_tokens.tokens}-token block ({kind}, x{len(where)}) {note}",
                 "",
             )
         )
