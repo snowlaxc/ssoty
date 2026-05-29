@@ -2,6 +2,9 @@
 
 **English** | [한국어](README-ko.md)
 
+[![CI](https://github.com/snowlaxc/ssoty/actions/workflows/ci.yml/badge.svg)](https://github.com/snowlaxc/ssoty/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 **Static cross-harness rule coherence auditor for AI coding agents.**
 *A symlink shares files. It does not guarantee the rule is applied the same way.*
 

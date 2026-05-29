@@ -2,6 +2,9 @@
 
 [English](README.md) | **한국어**
 
+[![CI](https://github.com/snowlaxc/ssoty/actions/workflows/ci.yml/badge.svg)](https://github.com/snowlaxc/ssoty/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 **AI 코딩 에이전트용 정적 cross-harness 룰 정합성 감사기.**
 *symlink는 파일을 공유할 뿐, 룰이 같은 방식으로 적용됨을 보장하지 않는다.*
 

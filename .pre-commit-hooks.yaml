@@ -1,0 +1,12 @@
+# Use ssoty as a pre-commit hook in your repo's .pre-commit-config.yaml:
+#   - repo: https://github.com/snowlaxc/ssoty
+#     rev: v0.1.0
+#     hooks:
+#       - id: ssoty
+- id: ssoty
+  name: ssoty cross-harness coherence audit
+  description: Fail the commit on any Critical cross-harness rule coherence finding
+  entry: ssoty audit --ci
+  language: python
+  pass_filenames: false
+  always_run: true
