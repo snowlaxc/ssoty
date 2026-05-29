@@ -215,3 +215,24 @@ def test_build_returns_result_and_tax():
     result, tax = build(MESSY)
     assert result.has_blocking() is True
     assert set(tax) == {"claude-code", "codex"}
+
+
+def test_cli_resolve_text_lists_load_basis(capsys):
+    assert main(["resolve", str(MESSY)]) == 0
+    out = capsys.readouterr().out
+    assert "always-on" in out and "skill-gated" in out and "shared-style.md" in out
+
+
+def test_cli_resolve_json_parses(capsys):
+    assert main(["resolve", str(MESSY), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert "claude-code" in payload and isinstance(payload["claude-code"], list)
+
+
+def test_robust_on_nonexistent_root(tmp_path: Path, capsys):
+    # an empty root (no .claude/.codex) must not crash; just empty surfaces
+    empty = tmp_path / "nothing"
+    assert main(["audit", str(empty)]) == 0
+    assert main(["resolve", str(empty)]) == 0
+    result, tax = build(empty)
+    assert result.findings == []

@@ -3,6 +3,7 @@
 Usage:
     ssoty audit   [PATH] [--json] [--redact] [--ci]
     ssoty metrics [PATH] [--json] [--redact]
+    ssoty resolve [PATH] [--json] [--redact]
 
 PATH is the root that contains ``.claude`` / ``.codex`` (defaults to $HOME).
 For fixtures, pass the fixture dir, e.g. ``ssoty audit examples/messy-setup``.
@@ -21,7 +22,13 @@ from ssoty.ignore import SsotyIgnore
 from ssoty.metrics import HarnessTax, compute_context_tax
 from ssoty.models import AuditResult
 from ssoty.redact import redact
-from ssoty.report import render_findings_text, render_json, render_metrics_text
+from ssoty.report import (
+    render_findings_text,
+    render_json,
+    render_metrics_text,
+    render_resolve_json,
+    render_resolve_text,
+)
 from ssoty.resolver import resolve_all
 
 
@@ -62,6 +69,16 @@ def cmd_metrics(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_resolve(args: argparse.Namespace) -> int:
+    surfaces = resolve_all(_resolve_root(args.path))
+    redactor = _redactor(args.redact)
+    if args.json:
+        print(render_resolve_json(surfaces, redactor))
+    else:
+        print(render_resolve_text(surfaces, redactor))
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ssoty", description="Static cross-harness rule coherence auditor.")
     parser.add_argument("--version", action="version", version=f"ssoty {__version__}")
@@ -79,6 +96,12 @@ def _build_parser() -> argparse.ArgumentParser:
     metrics.add_argument("--json", action="store_true", help="emit JSON")
     metrics.add_argument("--redact", action="store_true", help="mask home paths and emails")
     metrics.set_defaults(func=cmd_metrics)
+
+    resolve = sub.add_parser("resolve", help="show the effective rule surface per harness")
+    resolve.add_argument("path", nargs="?", help="root containing .claude/.codex (default: $HOME)")
+    resolve.add_argument("--json", action="store_true", help="emit JSON")
+    resolve.add_argument("--redact", action="store_true", help="mask home paths and emails")
+    resolve.set_defaults(func=cmd_resolve)
     return parser
 
 

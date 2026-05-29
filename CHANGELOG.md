@@ -7,7 +7,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](ht
 ### Added
 - Static cross-harness coherence checks: `broken_symlink`, `dangling_cross_ref`,
   `load_asymmetry`, `non_shared_surface`, `duplicate_content`, `skill_integrity`.
-- `ssoty audit` and `ssoty metrics` (Context Tax) CLI; `--json`, `--redact`, `--ci`.
+- `ssoty audit`, `ssoty metrics` (Context Tax), and `ssoty resolve` (effective
+  surface per harness: load basis + per-doc tokens) CLI; `--json`, `--redact`, `--ci`.
 - Claude Code + Codex skill adapters; GitHub Action; OIDC release workflow.
 - Synthetic fixtures + reproducible benchmark.
 
