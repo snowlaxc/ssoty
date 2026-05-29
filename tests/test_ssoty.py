@@ -316,6 +316,15 @@ def test_copilot_resolved(tmp_path: Path):
     assert resolve_all(tmp_path)["copilot"].by_name("copilot-instructions.md").load_basis == ALWAYS_ON
 
 
+def test_gemini_hierarchical_resolved(tmp_path: Path):
+    (tmp_path / ".gemini").mkdir()
+    (tmp_path / ".gemini" / "GEMINI.md").write_text("global", encoding="utf-8")
+    (tmp_path / "GEMINI.md").write_text("project", encoding="utf-8")
+    gem = resolve_all(tmp_path)["gemini"]
+    assert len(gem.docs) == 2  # global + project, both GEMINI.md (path-deduped, not name)
+    assert all(d.load_basis == ALWAYS_ON for d in gem.docs)
+
+
 def test_empty_harnesses_are_dropped(tmp_path: Path):
     (tmp_path / ".claude" / "rules").mkdir(parents=True)
     (tmp_path / ".claude" / "rules" / "a.md").write_text("x", encoding="utf-8")

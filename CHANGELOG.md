@@ -5,6 +5,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](ht
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-05-29
+### Added
+- **Gemini CLI** harness support: hierarchical `GEMINI.md` (global `~/.gemini/GEMINI.md`
+  + project `./GEMINI.md`), always-on. Five harnesses now: Claude Code, Codex, Cursor,
+  Copilot, Gemini.
+
 ## [0.1.2] — 2026-05-29
 ### Added
 - **Cursor** harness support: `.cursor/rules/*.mdc` (load basis read from the

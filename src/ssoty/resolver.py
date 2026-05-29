@@ -58,7 +58,22 @@ COPILOT_SPEC = HarnessSpec(
     harness="copilot",
     sources=(Source(".github/copilot-instructions.md", ALWAYS_ON),),
 )
-DEFAULT_SPECS: tuple[HarnessSpec, ...] = (CLAUDE_CODE_SPEC, CODEX_SPEC, CURSOR_SPEC, COPILOT_SPEC)
+# Gemini CLI: hierarchical GEMINI.md — global ~/.gemini/GEMINI.md + project ./GEMINI.md,
+# both always loaded into context.
+GEMINI_SPEC = HarnessSpec(
+    harness="gemini",
+    sources=(
+        Source(".gemini/GEMINI.md", ALWAYS_ON),
+        Source("GEMINI.md", ALWAYS_ON),
+    ),
+)
+DEFAULT_SPECS: tuple[HarnessSpec, ...] = (
+    CLAUDE_CODE_SPEC,
+    CODEX_SPEC,
+    CURSOR_SPEC,
+    COPILOT_SPEC,
+    GEMINI_SPEC,
+)
 
 
 def _read(path: Path) -> str:

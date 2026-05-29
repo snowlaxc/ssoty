@@ -120,8 +120,8 @@ a cross-harness tool shouldn't live inside one harness.
 ## Supported harnesses
 Claude Code (`~/.claude/rules`, `CLAUDE.md`), Codex (`AGENTS.md`,
 `global-agent-rules`), Cursor (`.cursor/rules/*.mdc` with `alwaysApply` frontmatter,
-legacy `.cursorrules`), and GitHub Copilot (`.github/copilot-instructions.md`).
-Empty harnesses are skipped. Point ssoty at `$HOME` or a project root.
+legacy `.cursorrules`), GitHub Copilot (`.github/copilot-instructions.md`), and
+Gemini CLI (`GEMINI.md`, `~/.gemini/GEMINI.md`). Empty harnesses are skipped. Point ssoty at `$HOME` or a project root.
 
 ## Privacy
 ssoty audits *your* config; its output can quote your rules verbatim. It runs
