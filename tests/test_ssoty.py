@@ -9,7 +9,7 @@ from ssoty.checks import CheckContext, run_checks
 from ssoty.cli import build, main
 from ssoty.ignore import SsotyIgnore
 from ssoty.metrics import compute_context_tax
-from ssoty.models import ALWAYS_ON, SKILL_GATED, HarnessSurface, RuleDoc, Severity
+from ssoty.models import ALWAYS_ON, CONDITIONAL, SKILL_GATED, HarnessSurface, RuleDoc, Severity
 from ssoty.redact import redact
 from ssoty.resolver import referenced_docs, resolve_all
 from ssoty.tokens import count_tokens
@@ -295,6 +295,32 @@ def test_referenced_docs_handles_anchor_title_uppercase():
     # m2: anchors, link titles, and uppercase extensions are real references
     text = '[a](foo.md#sec) [b](bar.md "title") and `BAZ.MD`'
     assert referenced_docs(text) == {"foo.md", "bar.md", "BAZ.MD"}
+
+
+def test_cursor_mdc_load_basis(tmp_path: Path):
+    rules = tmp_path / ".cursor" / "rules"
+    rules.mkdir(parents=True)
+    (rules / "always.mdc").write_text("---\nalwaysApply: true\n---\nbody", encoding="utf-8")
+    (rules / "auto.mdc").write_text("---\nglobs: '*.py'\nalwaysApply: false\n---\nbody", encoding="utf-8")
+    (tmp_path / ".cursorrules").write_text("legacy", encoding="utf-8")
+    cur = resolve_all(tmp_path)["cursor"]
+    assert cur.by_name("always.mdc").load_basis == ALWAYS_ON
+    assert cur.by_name("auto.mdc").load_basis == CONDITIONAL
+    assert cur.by_name(".cursorrules").load_basis == ALWAYS_ON
+
+
+def test_copilot_resolved(tmp_path: Path):
+    gh = tmp_path / ".github"
+    gh.mkdir()
+    (gh / "copilot-instructions.md").write_text("rules", encoding="utf-8")
+    assert resolve_all(tmp_path)["copilot"].by_name("copilot-instructions.md").load_basis == ALWAYS_ON
+
+
+def test_empty_harnesses_are_dropped(tmp_path: Path):
+    (tmp_path / ".claude" / "rules").mkdir(parents=True)
+    (tmp_path / ".claude" / "rules" / "a.md").write_text("x", encoding="utf-8")
+    surfaces = resolve_all(tmp_path)
+    assert set(surfaces) == {"claude-code"}  # no cursor/copilot/codex present here
 
 
 def test_robust_on_nonexistent_root(tmp_path: Path, capsys):

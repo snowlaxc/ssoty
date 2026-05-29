@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from ssoty.models import ALWAYS_ON, SKILL_GATED, HarnessSurface, RuleDoc
+from ssoty.models import ALWAYS_ON, CONDITIONAL, SKILL_GATED, HarnessSurface, RuleDoc
 
 
 @dataclass(frozen=True)
@@ -45,7 +45,20 @@ CODEX_SPEC = HarnessSpec(
         Source(".codex/skills/global-agent-rules/references", SKILL_GATED),
     ),
 )
-DEFAULT_SPECS: tuple[HarnessSpec, ...] = (CLAUDE_CODE_SPEC, CODEX_SPEC)
+# Cursor: project-level. .mdc rules carry an `alwaysApply` frontmatter flag that
+# decides load semantics per file (resolved in _effective_load_basis).
+CURSOR_SPEC = HarnessSpec(
+    harness="cursor",
+    sources=(
+        Source(".cursor/rules", CONDITIONAL, "*.mdc"),
+        Source(".cursorrules", ALWAYS_ON),  # legacy single file, always applied
+    ),
+)
+COPILOT_SPEC = HarnessSpec(
+    harness="copilot",
+    sources=(Source(".github/copilot-instructions.md", ALWAYS_ON),),
+)
+DEFAULT_SPECS: tuple[HarnessSpec, ...] = (CLAUDE_CODE_SPEC, CODEX_SPEC, CURSOR_SPEC, COPILOT_SPEC)
 
 
 def _read(path: Path) -> str:
@@ -84,6 +97,26 @@ def _collect(root: Path, source: Source) -> list[Path]:
     return []
 
 
+def _mdc_always_apply(path: Path) -> bool:
+    """True if a Cursor ``.mdc`` rule declares ``alwaysApply: true`` in frontmatter."""
+    text = _read(path)
+    if not text.startswith("---"):
+        return False
+    end = text.find("\n---", 3)
+    frontmatter = text[3:end] if end != -1 else ""
+    for line in frontmatter.splitlines():
+        if line.strip().lower().startswith("alwaysapply:"):
+            return line.split(":", 1)[1].strip().lower() == "true"
+    return False
+
+
+def _effective_load_basis(path: Path, default: str) -> str:
+    # Cursor .mdc: alwaysApply -> always-on; otherwise conditional (globs/agent-requested).
+    if path.suffix.lower() == ".mdc":
+        return ALWAYS_ON if _mdc_always_apply(path) else CONDITIONAL
+    return default
+
+
 def resolve_surface(root: Path, spec: HarnessSpec) -> HarnessSurface:
     surface = HarnessSurface(harness=spec.harness)
     seen: set[str] = set()  # dedup by full path, not basename, so e.g. a rules/CLAUDE.md
@@ -93,12 +126,16 @@ def resolve_surface(root: Path, spec: HarnessSpec) -> HarnessSurface:
             if key in seen:
                 continue
             seen.add(key)
-            surface.docs.append(_make_doc(spec.harness, path, source.load_basis))
+            basis = _effective_load_basis(path, source.load_basis)
+            surface.docs.append(_make_doc(spec.harness, path, basis))
     return surface
 
 
 def resolve_all(root: Path, specs: tuple[HarnessSpec, ...] = DEFAULT_SPECS) -> dict[str, HarnessSurface]:
-    return {spec.harness: resolve_surface(root, spec) for spec in specs}
+    # Only harnesses actually present at this root (drop empty surfaces) so ssoty
+    # reasons about real harnesses, not phantom ones.
+    surfaces = {spec.harness: resolve_surface(root, spec) for spec in specs}
+    return {h: s for h, s in surfaces.items() if s.docs}
 
 
 # --- cross-reference extraction ---

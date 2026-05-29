@@ -9,6 +9,7 @@ from pathlib import Path
 # Load semantics — how a rule reaches the agent's effective context.
 ALWAYS_ON = "always-on"  # injected every turn (actual surface)
 SKILL_GATED = "skill-gated"  # loaded only when a skill triggers (potential surface)
+CONDITIONAL = "conditional"  # loaded by rule frontmatter/globs (e.g. Cursor .mdc not alwaysApply)
 
 
 class Severity(str, Enum):

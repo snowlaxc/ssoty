@@ -5,6 +5,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](ht
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-05-29
+### Added
+- **Cursor** harness support: `.cursor/rules/*.mdc` (load basis read from the
+  `alwaysApply` frontmatter — always-on vs conditional) and legacy `.cursorrules`.
+- **GitHub Copilot** harness support: `.github/copilot-instructions.md`.
+- Empty harnesses (no rule files at the audited root) are dropped, so ssoty only
+  reports on harnesses actually present.
+
 ## [0.1.1] — 2026-05-29
 ### Fixed
 - Symlinked rule *directory* is now globbed instead of collapsing into one bogus

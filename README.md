@@ -117,6 +117,12 @@ and whether always-on or skill-gated), then runs deterministic checks. No model
 calls, no network — same input, same output. It is **harness-agnostic by design**:
 a cross-harness tool shouldn't live inside one harness.
 
+## Supported harnesses
+Claude Code (`~/.claude/rules`, `CLAUDE.md`), Codex (`AGENTS.md`,
+`global-agent-rules`), Cursor (`.cursor/rules/*.mdc` with `alwaysApply` frontmatter,
+legacy `.cursorrules`), and GitHub Copilot (`.github/copilot-instructions.md`).
+Empty harnesses are skipped. Point ssoty at `$HOME` or a project root.
+
 ## Privacy
 ssoty audits *your* config; its output can quote your rules verbatim. It runs
 **entirely locally** (no hosted service). This repo ships **synthetic fixtures

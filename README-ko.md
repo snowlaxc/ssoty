@@ -103,6 +103,12 @@ CLI가 제품이고, 어댑터는 그 CLI를 shell-out할 뿐입니다.
 skill-gated인지)한 뒤 결정적 체크를 돌립니다. 모델 호출·네트워크 0 — 같은 입력, 같은
 출력. **설계상 harness-agnostic**: cross-harness 도구는 한 하네스 안에 살면 안 됩니다.
 
+## 지원 하네스
+Claude Code (`~/.claude/rules`, `CLAUDE.md`), Codex (`AGENTS.md`,
+`global-agent-rules`), Cursor (`.cursor/rules/*.mdc`의 `alwaysApply` frontmatter로
+load 판별, legacy `.cursorrules`), GitHub Copilot (`.github/copilot-instructions.md`).
+비어있는 하네스는 스킵. `$HOME` 또는 프로젝트 루트를 가리키면 됩니다.
+
 ## 개인정보
 ssoty는 *당신의* config를 감사하며 출력이 룰을 그대로 인용할 수 있습니다. **전적으로
 로컬 실행**(호스팅 서비스 없음). 이 레포는 **합성 fixture만** 포함합니다.
