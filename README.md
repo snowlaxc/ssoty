@@ -96,7 +96,11 @@ uvx ssoty audit                 # audits $HOME (~/.claude, ~/.codex)
 pipx install ssoty
 ssoty audit --redact            # mask home paths + emails in output
 ssoty audit --ci                # exit non-zero on any Critical (for CI)
+ssoty audit --format sarif      # SARIF 2.1.0 (for github/codeql-action/upload-sarif)
 ```
+
+`--format {text,json,sarif}` selects the audit output (default `text`); `--json` is
+a back-compat alias for `--format json`.
 
 ### CI (GitHub Action)
 ```yaml
@@ -120,8 +124,9 @@ a cross-harness tool shouldn't live inside one harness.
 ## Supported harnesses
 Claude Code (`~/.claude/rules`, `CLAUDE.md`), Codex (`AGENTS.md`,
 `global-agent-rules`), Cursor (`.cursor/rules/*.mdc` with `alwaysApply` frontmatter,
-legacy `.cursorrules`), GitHub Copilot (`.github/copilot-instructions.md`), and
-Gemini CLI (`GEMINI.md`, `~/.gemini/GEMINI.md`). Empty harnesses are skipped. Point ssoty at `$HOME` or a project root.
+legacy `.cursorrules`), GitHub Copilot (`.github/copilot-instructions.md`),
+Gemini CLI (`GEMINI.md`, `~/.gemini/GEMINI.md`), and Cline (`.clinerules/` directory,
+legacy `.clinerules`, `AGENTS.md`). Empty harnesses are skipped. Point ssoty at `$HOME` or a project root.
 
 ## Privacy
 ssoty audits *your* config; its output can quote your rules verbatim. It runs

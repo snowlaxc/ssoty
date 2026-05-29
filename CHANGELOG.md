@@ -8,6 +8,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](ht
 - Release workflow triggers only on full semver tags (`v*.*.*`) so moving the
   floating `v0` tag no longer starts a duplicate publish; publish is `skip-existing`.
 
+## [0.1.4] — 2026-05-29
+### Added
+- **Cline** harness support: `.clinerules/` directory (all rule files, always-on),
+  legacy single-file `.clinerules`, and `AGENTS.md`. Six harnesses now: Claude Code,
+  Codex, Cursor, Copilot, Gemini, Cline.
+- **SARIF 2.1.0 output** for `ssoty audit` via `--format {text,json,sarif}` (default
+  `text`); `--json` is kept as a back-compat alias for `--format json`. SARIF is
+  stdlib-only JSON suitable for `github/codeql-action/upload-sarif`. Severity maps
+  Critical→error, Warning→warning, FYI→note. `finding.file` is emitted verbatim as
+  the artifact URI (load_asymmetry/duplicate_content URIs are non-clickable in v1).
+### Fixed
+- Cursor `.mdc` `alwaysApply` is no longer mis-parsed when the YAML value carries an
+  inline comment (`alwaysApply: true # primary rule`); an unquoted trailing comment
+  is stripped before comparison, so always-on rules are no longer mis-classified
+  conditional (which corrupted load_basis, load_asymmetry, and the metrics token split).
+
 ## [0.1.3] — 2026-05-29
 ### Added
 - **Gemini CLI** harness support: hierarchical `GEMINI.md` (global `~/.gemini/GEMINI.md`

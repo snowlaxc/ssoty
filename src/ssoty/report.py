@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 
+from ssoty import __version__
+from ssoty.checks import ALL_CHECKS
 from ssoty.metrics import HarnessTax
 from ssoty.models import AuditResult, Finding, HarnessSurface, Severity
 from ssoty.tokens import count_tokens
@@ -77,6 +79,58 @@ def render_json(result: AuditResult, tax: dict[str, HarnessTax], redactor: Calla
             }
             for h, t in tax.items()
         },
+    }
+    return redactor(json.dumps(payload, indent=2, sort_keys=True))
+
+
+_SARIF_LEVEL = {
+    Severity.CRITICAL: "error",
+    Severity.WARNING: "warning",
+    Severity.FYI: "note",
+}
+
+
+def _check_ids() -> list[str]:
+    # Check function __name__ is `check_<id>`; the <id> matches Finding.check.
+    return [fn.__name__.removeprefix("check_") for fn in ALL_CHECKS]
+
+
+def render_sarif(result: AuditResult, redactor: Callable[[str], str] = _IDENTITY) -> str:
+    """Render findings as SARIF 2.1.0 (plain JSON, stdlib-only, deterministic).
+
+    finding.file is emitted verbatim as the artifact URI. It is inconsistent across
+    checks (real path for broken_symlink/dangling/non_shared, bare basename for
+    load_asymmetry, composite string for duplicate_content), so load_asymmetry /
+    duplicate_content URIs are not clickable in v1. The Finding model is left intact;
+    a structured locations[] is a separate deferred change.
+    """
+    rules = [{"id": cid, "name": cid} for cid in _check_ids()]
+    results = [
+        {
+            "ruleId": f.check,
+            "level": _SARIF_LEVEL[f.severity],
+            "message": {"text": f.message},
+            "locations": [
+                {"physicalLocation": {"artifactLocation": {"uri": f.file}}},
+            ],
+        }
+        for f in result.findings
+    ]
+    payload = {
+        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [
+            {
+                "tool": {
+                    "driver": {
+                        "name": "ssoty",
+                        "version": __version__,
+                        "rules": rules,
+                    }
+                },
+                "results": results,
+            }
+        ],
     }
     return redactor(json.dumps(payload, indent=2, sort_keys=True))
 

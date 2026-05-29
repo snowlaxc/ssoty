@@ -211,6 +211,31 @@ def test_cli_audit_json_has_findings(capsys):
     assert len(payload["findings"]) > 0
 
 
+def test_cli_audit_sarif_parses(capsys):
+    from ssoty import __version__
+    from ssoty.checks import ALL_CHECKS
+
+    assert main(["audit", str(MESSY), "--format", "sarif"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["$schema"].endswith("sarif-schema-2.1.0.json")
+    assert payload["version"] == "2.1.0"
+    driver = payload["runs"][0]["tool"]["driver"]
+    assert driver["name"] == "ssoty"
+    assert driver["version"] == __version__
+    assert len(driver["rules"]) == len(ALL_CHECKS)
+    results = payload["runs"][0]["results"]
+    # a known Critical finding (broken_symlink/dangling) surfaces as level 'error'
+    assert any(r["level"] == "error" for r in results)
+
+
+def test_cli_audit_json_alias_keeps_legacy_shape(capsys):
+    # --json must still emit the legacy render_json shape (0.1.x back-compat)
+    main(["audit", str(MESSY), "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert "summary" in payload and "findings" in payload and "context_tax" in payload
+    assert payload["summary"]["Critical"] == 2
+
+
 def test_build_returns_result_and_tax():
     result, tax = build(MESSY)
     assert result.has_blocking() is True
@@ -309,6 +334,34 @@ def test_cursor_mdc_load_basis(tmp_path: Path):
     assert cur.by_name(".cursorrules").load_basis == ALWAYS_ON
 
 
+def test_cursor_mdc_always_apply_with_inline_comment(tmp_path: Path):
+    # regression: `alwaysApply: true # primary rule` is valid YAML and must resolve
+    # to ALWAYS_ON; an unquoted trailing comment was previously not stripped.
+    rules = tmp_path / ".cursor" / "rules"
+    rules.mkdir(parents=True)
+    (rules / "commented.mdc").write_text("---\nalwaysApply: true # primary rule\n---\nbody", encoding="utf-8")
+    cur = resolve_all(tmp_path)["cursor"]
+    assert cur.by_name("commented.mdc").load_basis == ALWAYS_ON
+
+
+def test_cursor_mdc_false_with_inline_comment_stays_conditional(tmp_path: Path):
+    # negative: comment-stripping must not flip a commented false to true
+    rules = tmp_path / ".cursor" / "rules"
+    rules.mkdir(parents=True)
+    (rules / "off.mdc").write_text("---\nalwaysApply: false # off\n---\nbody", encoding="utf-8")
+    cur = resolve_all(tmp_path)["cursor"]
+    assert cur.by_name("off.mdc").load_basis == CONDITIONAL
+
+
+def test_cursor_mdc_quoted_true_value(tmp_path: Path):
+    # quoted value is also handled (quote-agnostic for the common case)
+    rules = tmp_path / ".cursor" / "rules"
+    rules.mkdir(parents=True)
+    (rules / "quoted.mdc").write_text('---\nalwaysApply: "true"\n---\nbody', encoding="utf-8")
+    cur = resolve_all(tmp_path)["cursor"]
+    assert cur.by_name("quoted.mdc").load_basis == ALWAYS_ON
+
+
 def test_copilot_resolved(tmp_path: Path):
     gh = tmp_path / ".github"
     gh.mkdir()
@@ -323,6 +376,26 @@ def test_gemini_hierarchical_resolved(tmp_path: Path):
     gem = resolve_all(tmp_path)["gemini"]
     assert len(gem.docs) == 2  # global + project, both GEMINI.md (path-deduped, not name)
     assert all(d.load_basis == ALWAYS_ON for d in gem.docs)
+
+
+def test_cline_dir_resolved(tmp_path: Path):
+    rules = tmp_path / ".clinerules"
+    rules.mkdir()
+    (rules / "style.md").write_text("synthetic cline rule for /home/dev", encoding="utf-8")
+    cline = resolve_all(tmp_path)["cline"]
+    assert cline.by_name("style.md").load_basis == ALWAYS_ON
+
+
+def test_cline_legacy_single_file_resolved(tmp_path: Path):
+    (tmp_path / ".clinerules").write_text("synthetic legacy cline rule", encoding="utf-8")
+    cline = resolve_all(tmp_path)["cline"]
+    assert cline.by_name(".clinerules").load_basis == ALWAYS_ON
+
+
+def test_cline_agents_md_resolved(tmp_path: Path):
+    (tmp_path / "AGENTS.md").write_text("synthetic AGENTS.md rule", encoding="utf-8")
+    cline = resolve_all(tmp_path)["cline"]
+    assert cline.by_name("AGENTS.md").load_basis == ALWAYS_ON
 
 
 def test_empty_harnesses_are_dropped(tmp_path: Path):

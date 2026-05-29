@@ -67,12 +67,26 @@ GEMINI_SPEC = HarnessSpec(
         Source("GEMINI.md", ALWAYS_ON),
     ),
 )
+# Cline: reads a `.clinerules/` directory (all rule files, always-on) and a legacy
+# single-file `.clinerules`, plus AGENTS.md. _collect checks is_dir() before the
+# symlink/file branch, so when `.clinerules` is a directory the dir source resolves
+# and the same-rel file source is a no-op; when it is a file the dir source is empty
+# and the file source resolves. Both coexist safely.
+CLINE_SPEC = HarnessSpec(
+    harness="cline",
+    sources=(
+        Source(".clinerules", ALWAYS_ON, "*.md"),  # directory form: all rule files
+        Source(".clinerules", ALWAYS_ON),  # legacy single-file form
+        Source("AGENTS.md", ALWAYS_ON),
+    ),
+)
 DEFAULT_SPECS: tuple[HarnessSpec, ...] = (
     CLAUDE_CODE_SPEC,
     CODEX_SPEC,
     CURSOR_SPEC,
     COPILOT_SPEC,
     GEMINI_SPEC,
+    CLINE_SPEC,
 )
 
 
@@ -121,7 +135,17 @@ def _mdc_always_apply(path: Path) -> bool:
     frontmatter = text[3:end] if end != -1 else ""
     for line in frontmatter.splitlines():
         if line.strip().lower().startswith("alwaysapply:"):
-            return line.split(":", 1)[1].strip().lower() == "true"
+            value = line.split(":", 1)[1]
+            # Strip an unquoted trailing YAML comment (`true # primary rule`) and a
+            # value that is wholly a comment, then strip surrounding quotes, before
+            # comparing. Quote-agnostic for the common case; not a full YAML parser
+            # (no new deps).
+            value = value.split(" #", 1)[0]
+            value = value.strip()
+            if value.startswith("#"):
+                value = ""
+            value = value.strip("\"'")
+            return value.strip().lower() == "true"
     return False
 
 

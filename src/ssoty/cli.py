@@ -1,7 +1,7 @@
 """``ssoty`` command-line entry point.
 
 Usage:
-    ssoty audit   [PATH] [--json] [--redact] [--ci]
+    ssoty audit   [PATH] [--format {text,json,sarif}] [--json] [--redact] [--ci]
     ssoty metrics [PATH] [--json] [--redact]
     ssoty resolve [PATH] [--json] [--redact]
 
@@ -28,6 +28,7 @@ from ssoty.report import (
     render_metrics_text,
     render_resolve_json,
     render_resolve_text,
+    render_sarif,
 )
 from ssoty.resolver import resolve_all
 
@@ -50,7 +51,11 @@ def _redactor(enabled: bool) -> Callable[[str], str]:
 def cmd_audit(args: argparse.Namespace) -> int:
     result, tax = build(_resolve_root(args.path))
     redactor = _redactor(args.redact)
-    if args.json:
+    # --json is a back-compat alias for --format json (preserve 0.1.x behavior).
+    fmt = "json" if args.json else args.format
+    if fmt == "sarif":
+        print(render_sarif(result, redactor))
+    elif fmt == "json":
         print(render_json(result, tax, redactor))
     else:
         print(render_findings_text(result, redactor))
@@ -86,7 +91,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
     audit = sub.add_parser("audit", help="report coherence findings")
     audit.add_argument("path", nargs="?", help="root containing .claude/.codex (default: $HOME)")
-    audit.add_argument("--json", action="store_true", help="emit JSON")
+    audit.add_argument(
+        "--format",
+        choices=("text", "json", "sarif"),
+        default="text",
+        help="output format (sarif: SARIF 2.1.0 for code-scanning upload)",
+    )
+    audit.add_argument("--json", action="store_true", help="emit JSON (alias for --format json)")
     audit.add_argument("--redact", action="store_true", help="mask home paths and emails")
     audit.add_argument("--ci", action="store_true", help="exit non-zero on any Critical finding")
     audit.set_defaults(func=cmd_audit)
