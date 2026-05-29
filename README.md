@@ -85,6 +85,10 @@ Reproduce: `uvx ssoty metrics examples/messy-setup` (see [`benchmarks/REPORT.md`
 
 ## Install
 
+> **Status: pre-release.** Not on PyPI yet — until `v0.1.0` is published, install
+> from GitHub: `uvx --from git+https://github.com/snowlaxc/ssoty ssoty audit`.
+> The commands below work once published (see [`RELEASING.md`](RELEASING.md)).
+
 ```bash
 # zero-install run
 uvx ssoty audit                 # audits $HOME (~/.claude, ~/.codex)

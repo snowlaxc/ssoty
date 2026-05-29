@@ -72,6 +72,10 @@ codex       · skill-gated: 106 →   0 tokens
 
 ## 설치
 
+> **상태: 사전 배포.** 아직 PyPI 미배포 — `v0.1.0` 배포 전까지는 GitHub에서 설치:
+> `uvx --from git+https://github.com/snowlaxc/ssoty ssoty audit`.
+> 아래 명령은 배포 후 동작합니다 ([`RELEASING.md`](RELEASING.md) 참고).
+
 ```bash
 # 무설치 실행
 uvx ssoty audit                 # $HOME(~/.claude, ~/.codex) 감사
