@@ -18,6 +18,7 @@ Hard safety contract:
 
 from __future__ import annotations
 
+import os
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -119,8 +120,11 @@ def _backup_node(src: Path, root: Path, backup_dir: Path) -> Path:
     dst = backup_dir / rel
     dst.parent.mkdir(parents=True, exist_ok=True)
     if src.is_symlink():
-        # copy2(follow_symlinks=False) recreates the link with its (dead) target.
-        shutil.copy2(src, dst, follow_symlinks=False)
+        # Recreate the link node with its (possibly dead) target. Done explicitly
+        # via os.symlink rather than shutil.copy2(follow_symlinks=False), whose
+        # copystat-on-a-dangling-symlink is not portable across Python/OS (it
+        # silently skipped the backup on Linux + Python 3.10/3.11).
+        os.symlink(os.readlink(src), dst)
     else:
         shutil.copy2(src, dst)
     return dst

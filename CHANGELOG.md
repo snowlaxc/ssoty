@@ -4,6 +4,14 @@ All notable changes to this project are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
+
+## [0.1.8] — 2026-05-30
+### Fixed
+- `ssoty fix` broken-symlink backup is now portable across Python 3.10–3.13.
+  It recreates the link via `os.symlink(os.readlink(...))` instead of
+  `shutil.copy2(follow_symlinks=False)`, whose copystat-on-a-dangling-symlink
+  silently skipped the backup on Linux + Python 3.10/3.11 (CI compat matrix).
+  The backup-before-remove safety guarantee now holds on every supported Python.
 ### Fixed
 - Release workflow triggers only on full semver tags (`v*.*.*`) so moving the
   floating `v0` tag no longer starts a duplicate publish; publish is `skip-existing`.

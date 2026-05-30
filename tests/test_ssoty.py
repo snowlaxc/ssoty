@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from ssoty.checks import CheckContext, run_checks
@@ -572,13 +573,13 @@ def test_fix_apply_removes_broken_symlink_and_backs_up(tmp_path: Path, capsys):
     assert "removed broken symlink" in out
     # the dangling symlink is gone
     assert not link.is_symlink()
-    # a backup of the link node exists, preserving the dead target string
-    backups = list((tmp_path / ".ssoty-backup").glob("*/.claude/rules/x.md"))
-    assert len(backups) == 1
-    backup = backups[0]
+    # a backup of the link node exists, preserving the dead target string.
+    # Use iterdir + is_symlink (lstat) — Path.glob skips broken symlink leaves
+    # before Python 3.13, so globbing the dangling backup link would miss it.
+    ts_dirs = [p for p in (tmp_path / ".ssoty-backup").iterdir() if p.is_dir()]
+    assert len(ts_dirs) == 1
+    backup = ts_dirs[0] / ".claude" / "rules" / "x.md"
     assert backup.is_symlink()
-    import os
-
     assert os.readlink(backup) == "./nope.md"
 
 
