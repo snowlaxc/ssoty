@@ -6,6 +6,7 @@ Usage:
     ssoty metrics [PATH] [--json] [--redact]
     ssoty resolve [PATH] [--json] [--redact]
     ssoty fix     [PATH] [--apply] [--redact] [--scaffold-ignore]
+    ssoty sync    [PATH] [--apply] [--method symlink] [--manifest PATH] [--redact]
 
 PATH is the root that contains ``.claude`` / ``.codex`` (defaults to $HOME).
 For fixtures, pass the fixture dir, e.g. ``ssoty audit examples/messy-setup``.
@@ -43,6 +44,20 @@ from ssoty.report import (
     render_sarif,
 )
 from ssoty.resolver import resolve_all
+from ssoty.sync import (
+    ManifestError,
+    apply_plan,
+    build_plan,
+    load_manifest,
+    manifest_path,
+    plan_has_apply_work,
+)
+from ssoty.sync import (
+    render_apply_text as render_sync_apply_text,
+)
+from ssoty.sync import (
+    render_plan_text as render_sync_plan_text,
+)
 
 
 def _resolve_root(path: str | None) -> Path:
@@ -141,6 +156,34 @@ def cmd_fix(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_sync(args: argparse.Namespace) -> int:
+    root = _resolve_root(args.path)
+    redactor = _redactor(args.redact)
+    try:
+        mpath = manifest_path(root, args.manifest)
+        manifest = load_manifest(mpath)
+        # CLI --method overrides any in-manifest "method"; default is symlink.
+        method = args.method or manifest.get("method", "symlink")
+        plan = build_plan(root, manifest, mpath.parent, method=method)
+    except ManifestError as exc:
+        # Full validation precedes any mutation: a bad manifest exits 2, never a partial write.
+        print(f"ssoty sync: {redactor(str(exc))}", file=sys.stderr)
+        return 2
+    if not args.apply:
+        # Dry-run is the DEFAULT: print the exact plan, write nothing, create no backup dir.
+        print(redactor(render_sync_plan_text(plan)))
+        return 0
+    if not plan_has_apply_work(plan):
+        # Fully-synced (or empty) tree: no backup dir, no writes (idempotent).
+        print(redactor(render_sync_apply_text(None, [])))
+        return 0
+    # apply_plan creates the backup dir lazily — only if a real node is backed up; an
+    # all-new-links plan leaves no backup dir behind.
+    results, backup_dir = apply_plan(plan, root)
+    print(redactor(render_sync_apply_text(backup_dir, results)))
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ssoty", description="Static cross-harness rule coherence auditor.")
     parser.add_argument("--version", action="version", version=f"ssoty {__version__}")
@@ -191,6 +234,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="also append intentionally non-shared rule names to .ssotyignore",
     )
     fix.set_defaults(func=cmd_fix)
+
+    sync = sub.add_parser("sync", help="distribute the canonical rule source into harness targets (DRY-RUN by default)")
+    sync.add_argument("path", nargs="?", help="root the manifest's relative paths resolve against (default: $HOME)")
+    sync.add_argument("--apply", action="store_true", help="perform the plan (default: dry-run, writes nothing)")
+    sync.add_argument(
+        "--method",
+        choices=("symlink",),
+        default="symlink",
+        help="link method (symlink only; reserved for future 'copy'); overrides in-manifest method",
+    )
+    sync.add_argument("--manifest", help="manifest path (default: ssoty.json in PATH)")
+    sync.add_argument("--redact", action="store_true", help="mask home paths and emails")
+    sync.set_defaults(func=cmd_sync)
     return parser
 
 

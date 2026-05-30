@@ -1141,3 +1141,368 @@ def test_content_divergence_deterministic(tmp_path: Path):
     first = [(f.severity, f.check, f.harness, f.file, f.message) for f in run_checks(ctx)]
     second = [(f.severity, f.check, f.harness, f.file, f.message) for f in run_checks(ctx)]
     assert first == second
+
+
+# --- sync: manager mode — distribute canonical source into harness targets ---
+# Every test operates ONLY on tmp_path (a fake canonical source dir + fake harness
+# targets); ssoty sync --apply is NEVER run against a real ~/.claude / ~/.codex.
+
+
+def _sync_sandbox(tmp_path: Path):
+    """Build a fake canonical SOURCE + a manifest under tmp_path; return (root, manifest).
+
+    Layout::
+        tmp_path/src/common/common-a.md
+        tmp_path/src/claude/claude-b.md
+        tmp_path/src/CLAUDE.md
+        tmp_path/root/                      (the sync root; targets resolve here)
+        tmp_path/root/ssoty.json            (manifest; relative paths resolve to its dir)
+    """
+    src = tmp_path / "src"
+    (src / "common").mkdir(parents=True)
+    (src / "claude").mkdir(parents=True)
+    (src / "common" / "common-a.md").write_text("synthetic common rule for /home/dev", encoding="utf-8")
+    (src / "claude" / "claude-b.md").write_text("synthetic claude rule", encoding="utf-8")
+    (src / "CLAUDE.md").write_text("synthetic entrypoint", encoding="utf-8")
+    root = tmp_path / "root"
+    root.mkdir()
+    manifest = root / "ssoty.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "method": "symlink",
+                "common": {"sources": [{"dir": "../src/common", "pattern": "*.md"}]},
+                "harnesses": {
+                    "claude-code": {
+                        "target": ".claude/rules",
+                        "sources": [{"dir": "../src/claude", "pattern": "*.md"}],
+                        "common": True,
+                    },
+                    "claude-code-entrypoint": {
+                        "target": ".claude/CLAUDE.md",
+                        "sources": [{"file": "../src/CLAUDE.md"}],
+                        "common": False,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return root, manifest
+
+
+def test_sync_apply_refuses_symlinked_parent_escape(tmp_path: Path):
+    # A target whose parent is a pre-planted symlink pointing OUTSIDE the sync root must be
+    # refused at apply time (realpath containment), writing NOTHING outside root. Lexical
+    # _require_under_root can't see this; the realpath re-check must.
+    root, manifest = _sync_sandbox(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (root / ".claude").symlink_to(outside, target_is_directory=True)  # parent of every target escapes
+    rc = main(["sync", str(root), "--apply", "--manifest", str(manifest)])
+    assert rc != 0  # refused (ManifestError -> exit 2), not a silent escape
+    assert list(outside.iterdir()) == []  # nothing was written outside the sync root
+
+
+def test_sync_dry_run_changes_nothing(tmp_path: Path, capsys):
+    root, manifest = _sync_sandbox(tmp_path)
+    assert main(["sync", str(root), "--manifest", str(manifest)]) == 0
+    out = capsys.readouterr().out
+    assert "DRY-RUN" in out
+    assert "new link:" in out
+    # nothing written: no symlinks, no backup dir
+    assert not (root / ".claude" / "rules").exists()
+    assert not (root / ".claude" / "CLAUDE.md").exists()
+    assert not (root / ".ssoty-backup").exists()
+
+
+def test_sync_apply_creates_expected_symlinks(tmp_path: Path, capsys):
+    root, manifest = _sync_sandbox(tmp_path)
+    assert main(["sync", str(root), "--apply", "--manifest", str(manifest)]) == 0
+    capsys.readouterr()
+    rules = root / ".claude" / "rules"
+    # common -> claude-code AND the per-harness individual rule are both linked
+    common_link = rules / "common-a.md"
+    indiv_link = rules / "claude-b.md"
+    assert common_link.is_symlink() and common_link.exists()
+    assert indiv_link.is_symlink() and indiv_link.exists()
+    # link target is the ABSOLUTE canonical source path
+    assert os.readlink(common_link) == str((tmp_path / "src" / "common" / "common-a.md").resolve())
+    # the file target (CLAUDE.md) is a single link
+    entry = root / ".claude" / "CLAUDE.md"
+    assert entry.is_symlink() and entry.exists()
+    assert entry.read_text(encoding="utf-8") == "synthetic entrypoint"
+
+
+def test_sync_apply_backs_up_preexisting_real_file(tmp_path: Path, capsys):
+    root, manifest = _sync_sandbox(tmp_path)
+    # a user's hand-edited real CLAUDE.md at the file target
+    (root / ".claude").mkdir(parents=True)
+    (root / ".claude" / "CLAUDE.md").write_text("USER HAND-EDITED", encoding="utf-8")
+    assert main(["sync", str(root), "--apply", "--manifest", str(manifest)]) == 0
+    out = capsys.readouterr().out
+    assert "backup written to:" in out
+    assert "backup+link:" in out
+    # now a symlink to the canonical source
+    entry = root / ".claude" / "CLAUDE.md"
+    assert entry.is_symlink()
+    assert entry.read_text(encoding="utf-8") == "synthetic entrypoint"
+    # the old hand-edited content is preserved in the backup, recoverable by path
+    ts_dirs = [p for p in (root / ".ssoty-backup").iterdir() if p.is_dir()]
+    assert len(ts_dirs) == 1
+    backup = ts_dirs[0] / ".claude" / "CLAUDE.md"
+    assert backup.read_text(encoding="utf-8") == "USER HAND-EDITED"
+
+
+def test_sync_apply_is_idempotent(tmp_path: Path, capsys):
+    root, manifest = _sync_sandbox(tmp_path)
+    assert main(["sync", str(root), "--apply", "--manifest", str(manifest)]) == 0
+    capsys.readouterr()
+    # first apply may or may not create a backup (all new links -> no backup);
+    # the second apply must be a pure no-op with NO new backup dir.
+    backups_before = sorted((root / ".ssoty-backup").glob("*")) if (root / ".ssoty-backup").exists() else []
+    assert main(["sync", str(root), "--apply", "--manifest", str(manifest)]) == 0
+    out = capsys.readouterr().out
+    assert "0/0 link(s) changed" in out
+    backups_after = sorted((root / ".ssoty-backup").glob("*")) if (root / ".ssoty-backup").exists() else []
+    assert backups_after == backups_before
+
+
+def test_sync_first_apply_all_new_links_creates_no_backup(tmp_path: Path, capsys):
+    # a fully fresh tree (no pre-existing files at targets): every link is NEW_LINK,
+    # which needs no backup -> no backup dir is created.
+    root, manifest = _sync_sandbox(tmp_path)
+    assert main(["sync", str(root), "--apply", "--manifest", str(manifest)]) == 0
+    capsys.readouterr()
+    assert not (root / ".ssoty-backup").exists()
+
+
+def test_sync_relinks_a_differing_symlink_with_backup(tmp_path: Path, capsys):
+    root, manifest = _sync_sandbox(tmp_path)
+    rules = root / ".claude" / "rules"
+    rules.mkdir(parents=True)
+    # a stale symlink at a target name pointing somewhere else
+    (tmp_path / "elsewhere.md").write_text("synthetic stale", encoding="utf-8")
+    stale = rules / "common-a.md"
+    stale.symlink_to(tmp_path / "elsewhere.md")
+    assert main(["sync", str(root), "--apply", "--manifest", str(manifest)]) == 0
+    out = capsys.readouterr().out
+    assert "relinked" in out
+    # now points at the canonical source, and the old link node is backed up
+    assert os.readlink(stale) == str((tmp_path / "src" / "common" / "common-a.md").resolve())
+    ts_dirs = [p for p in (root / ".ssoty-backup").iterdir() if p.is_dir()]
+    backup = ts_dirs[0] / ".claude" / "rules" / "common-a.md"
+    assert backup.is_symlink()
+    assert os.readlink(backup) == str(tmp_path / "elsewhere.md")
+
+
+def test_sync_orphan_cleanup_removes_only_canonical_pointing_dead_links(tmp_path: Path, capsys):
+    root, manifest = _sync_sandbox(tmp_path)
+    assert main(["sync", str(root), "--apply", "--manifest", str(manifest)]) == 0
+    capsys.readouterr()
+    rules = root / ".claude" / "rules"
+    # an ORPHAN: points into the canonical source but its target vanished
+    orphan = rules / "gone.md"
+    orphan.symlink_to(tmp_path / "src" / "common" / "gone.md")
+    # a FOREIGN dead link: points OUTSIDE the source -> must NOT be touched
+    foreign = rules / "foreign.md"
+    foreign.symlink_to(tmp_path / "outside" / "thing.md")
+    assert main(["sync", str(root), "--apply", "--manifest", str(manifest)]) == 0
+    out = capsys.readouterr().out
+    assert "removed orphan:" in out
+    assert not orphan.is_symlink()  # cleaned
+    assert foreign.is_symlink()  # foreign dead link preserved
+
+
+def test_sync_never_writes_outside_declared_targets(tmp_path: Path, capsys):
+    # a malicious target escaping the root must be rejected (exit 2) with NO write.
+    root = tmp_path / "root"
+    (root).mkdir()
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "x.md").write_text("synthetic", encoding="utf-8")
+    manifest = root / "ssoty.json"
+    manifest.write_text(
+        json.dumps({"version": 1, "harnesses": {"x": {"target": "../../evil", "sources": [{"file": "../src/x.md"}]}}}),
+        encoding="utf-8",
+    )
+    assert main(["sync", str(root), "--apply", "--manifest", str(manifest)]) == 2
+    err = capsys.readouterr().err
+    assert "escapes sync root" in err
+    assert not (tmp_path / "evil").exists()
+    assert not (root / ".ssoty-backup").exists()
+
+
+def test_sync_missing_manifest_exits_2(tmp_path: Path, capsys):
+    assert main(["sync", str(tmp_path), "--manifest", str(tmp_path / "nope.json")]) == 2
+    assert "manifest not found" in capsys.readouterr().err
+
+
+def test_sync_invalid_json_exits_2(tmp_path: Path, capsys):
+    bad = tmp_path / "ssoty.json"
+    bad.write_text("{not valid json", encoding="utf-8")
+    assert main(["sync", str(tmp_path), "--manifest", str(bad)]) == 2
+    assert "invalid JSON" in capsys.readouterr().err
+
+
+def test_sync_synced_sandbox_passes_audit_clean(tmp_path: Path, capsys):
+    # round-trip contract: sync WRITES exactly what audit READS. After --apply, the
+    # resolver sees each doc as a non-broken symlink and run_checks yields no Critical.
+    root, manifest = _sync_sandbox(tmp_path)
+    assert main(["sync", str(root), "--apply", "--manifest", str(manifest)]) == 0
+    capsys.readouterr()
+    surfaces = resolve_all(root)
+    claude = surfaces["claude-code"]
+    common_doc = claude.by_name("common-a.md")
+    assert common_doc is not None
+    assert common_doc.is_symlink is True
+    assert common_doc.broken is False
+    ctx = CheckContext(surfaces=surfaces, ignore=SsotyIgnore.load(root), root=root)
+    findings = run_checks(ctx)
+    assert not [f for f in findings if f.severity is Severity.CRITICAL]
+    # audit --ci exits 0 on the coherent synced tree
+    assert main(["audit", str(root), "--ci"]) == 0
+
+
+def test_sync_redact_masks_home_in_plan(tmp_path: Path, capsys, monkeypatch):
+    root, manifest = _sync_sandbox(tmp_path)
+    # make tmp_path stand in for $HOME so --redact has something to mask
+    monkeypatch.setenv("HOME", str(tmp_path))
+    import ssoty.redact as r
+
+    orig = r.os.path.expanduser
+    r.os.path.expanduser = lambda p: p.replace("~", str(tmp_path)) if p.startswith("~") else p
+    try:
+        assert main(["sync", str(root), "--manifest", str(manifest), "--redact"]) == 0
+        out = capsys.readouterr().out
+    finally:
+        r.os.path.expanduser = orig
+    assert str(tmp_path) not in out
+    assert "$HOME" in out
+
+
+def test_sync_in_manifest_method_and_file_alias(tmp_path: Path, capsys):
+    # a {"source": ...} alias for {"file": ...} resolves the same single-file link.
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "ENTRY.md").write_text("synthetic entry", encoding="utf-8")
+    root = tmp_path / "root"
+    root.mkdir()
+    manifest = root / "ssoty.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "method": "symlink",
+                "harnesses": {"e": {"target": ".x/ENTRY.md", "sources": [{"source": "../src/ENTRY.md"}]}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert main(["sync", str(root), "--apply", "--manifest", str(manifest)]) == 0
+    capsys.readouterr()
+    link = root / ".x" / "ENTRY.md"
+    assert link.is_symlink() and link.read_text(encoding="utf-8") == "synthetic entry"
+
+
+def test_sync_rejects_unsupported_method(tmp_path: Path, capsys):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "x.md").write_text("synthetic", encoding="utf-8")
+    root = tmp_path / "root"
+    root.mkdir()
+    manifest = root / "ssoty.json"
+    manifest.write_text(
+        json.dumps({"version": 1, "method": "copy", "harnesses": {"h": {"target": ".h", "sources": []}}}),
+        encoding="utf-8",
+    )
+    # an in-manifest "method: copy" is rejected (only symlink supported)
+    from ssoty.sync import ManifestError, build_plan, load_manifest
+
+    data = load_manifest(manifest)
+    try:
+        build_plan(root, data, manifest.parent, method=data["method"])
+        raised = False
+    except ManifestError as exc:
+        raised = "unsupported method" in str(exc)
+    assert raised
+
+
+def test_sync_rejects_malformed_manifest_shapes(tmp_path: Path):
+    import pytest
+
+    from ssoty.sync import ManifestError, build_plan
+
+    root = tmp_path
+    base = tmp_path
+    bad_manifests = [
+        {},  # 'harnesses' missing
+        {"harnesses": {}},  # empty harnesses
+        {"harnesses": []},  # harnesses not an object
+        {"harnesses": {"h": {"sources": []}}},  # harness target missing
+        {"harnesses": {"h": {"target": ".h", "sources": {}}}},  # sources not a list
+        {"harnesses": {"h": {"target": ".h", "sources": [{"nope": 1}]}}},  # source missing dir/file
+        {"common": [], "harnesses": {"h": {"target": ".h"}}},  # common not an object
+    ]
+    for bad in bad_manifests:
+        with pytest.raises(ManifestError):
+            build_plan(root, bad, base)
+
+
+def test_sync_dir_target_with_no_sources_links_nothing(tmp_path: Path, capsys):
+    # a directory target whose sources resolve to no files: plan is empty, --apply is a no-op
+    root = tmp_path / "root"
+    (root / ".x").mkdir(parents=True)  # exists as a dir -> treated as dir target
+    src = tmp_path / "src"
+    src.mkdir()  # empty source dir
+    manifest = root / "ssoty.json"
+    manifest.write_text(
+        json.dumps(
+            {"version": 1, "harnesses": {"x": {"target": ".x", "sources": [{"dir": "../src", "pattern": "*.md"}]}}}
+        ),
+        encoding="utf-8",
+    )
+    assert main(["sync", str(root), "--apply", "--manifest", str(manifest)]) == 0
+    out = capsys.readouterr().out
+    assert "0/0 link(s) changed" in out
+    assert not (root / ".ssoty-backup").exists()
+
+
+def test_sync_dir_glob_into_bare_target_is_a_dir_target(tmp_path: Path):
+    # a bare (non-existent) target fed by a directory glob is treated as a DIRECTORY target
+    # (one link per source basename), documenting the is_dir_target rule.
+    from ssoty.sync import build_plan
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.md").write_text("synthetic", encoding="utf-8")
+    (src / "b.md").write_text("synthetic", encoding="utf-8")
+    root = tmp_path / "root"
+    root.mkdir()
+    manifest = {
+        "version": 1,
+        "harnesses": {"f": {"target": "rules-dir", "sources": [{"dir": "../src", "pattern": "*.md"}]}},
+    }
+    plan = build_plan(root, manifest, root)
+    assert len(plan.links) == 2
+
+
+def test_sync_file_target_with_two_file_sources_is_rejected(tmp_path: Path):
+    # a bare-file target fed by TWO explicit file sources is contradictory (one link expected).
+    import pytest
+
+    from ssoty.sync import ManifestError, build_plan
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.md").write_text("synthetic", encoding="utf-8")
+    (src / "b.md").write_text("synthetic", encoding="utf-8")
+    root = tmp_path / "root"
+    (root / "x").mkdir(parents=True)  # ensure ENTRY.md's parent is not a dir target
+    manifest = {
+        "version": 1,
+        "harnesses": {"f": {"target": "x/ENTRY.md", "sources": [{"file": "../src/a.md"}, {"file": "../src/b.md"}]}},
+    }
+    with pytest.raises(ManifestError, match="expected 1"):
+        build_plan(root, manifest, root)
