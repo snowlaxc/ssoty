@@ -31,6 +31,9 @@ def render_findings_text(result: AuditResult, redactor: Callable[[str], str] = _
     lines: list[str] = []
     counts = _summary_counts(result.findings)
     lines.append(f"ssoty audit — {counts['Critical']} Critical, " f"{counts['Warning']} Warning, {counts['FYI']} FYI")
+    rule_docs = sum(len(s.docs) for s in result.surfaces.values())
+    harnesses = len(result.surfaces)
+    lines.append(f"  ({rule_docs} rule docs across {harnesses} harnesses checked)")
     lines.append("")
     if not result.findings:
         lines.append("  no findings — surfaces are coherent.")
@@ -58,8 +61,11 @@ def render_metrics_text(tax: dict[str, HarnessTax], redactor: Callable[[str], st
 
 
 def render_json(result: AuditResult, tax: dict[str, HarnessTax], redactor: Callable[[str], str] = _IDENTITY) -> str:
+    summary = _summary_counts(result.findings)
+    summary["rule_docs"] = sum(len(s.docs) for s in result.surfaces.values())
+    summary["harnesses"] = len(result.surfaces)
     payload = {
-        "summary": _summary_counts(result.findings),
+        "summary": summary,
         "findings": [
             {
                 "severity": f.severity.value,
@@ -198,6 +204,8 @@ def _verdict_tally(d: SurfaceDiff) -> str:
     if d.broken_cross_refs:
         n = len(d.broken_cross_refs)
         parts.append(f"{n} broken cross-ref{'s' if n != 1 else ''}")
+    if d.content_divergence:
+        parts.append(f"{len(d.content_divergence)} divergent content")
     return ", ".join(parts)
 
 
@@ -219,6 +227,12 @@ def render_diff_text(diffs: list[SurfaceDiff], redactor: Callable[[str], str] = 
                 lines.append(
                     f"          {ref.src_harness}:{ref.src_doc} -> '{ref.ref}'  "
                     f"(loads only in {ref.present_in}, NOT in {ref.src_harness})"
+                )
+        if d.content_divergence:
+            lines.append(f"      same rule, divergent content ({len(d.content_divergence)}):")
+            for cd in d.content_divergence:
+                lines.append(
+                    f"          {cd.name}  (separate copies drift — " f"{d.a}:{cd.a_path} vs {d.b}:{cd.b_path})"
                 )
         if d.coherent:
             lines.append(f"      VERDICT: {_verdict_text(d)}")
@@ -248,6 +262,9 @@ def render_diff_json(diffs: list[SurfaceDiff], redactor: Callable[[str], str] = 
                     "present_in": ref.present_in,
                 }
                 for ref in d.broken_cross_refs
+            ],
+            "content_divergence": [
+                {"name": cd.name, "a_path": cd.a_path, "b_path": cd.b_path} for cd in d.content_divergence
             ],
             "coherent": d.coherent,
             "verdict": _verdict_text(d),

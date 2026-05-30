@@ -1026,3 +1026,118 @@ def test_guard_genuine_dangling_and_load_asymmetry_still_fire():
     assert any(f.severity is Severity.WARNING and "team-rules.md" in f.message for f in dangling)
     asym = [f for f in findings if f.check == "load_asymmetry"]
     assert asym and any(f.severity is Severity.WARNING for f in asym)
+
+
+def _doc(harness: str, name: str, path: Path, text: str = "", broken: bool = False) -> RuleDoc:
+    return RuleDoc(harness=harness, name=name, path=path, load_basis=ALWAYS_ON, text=text, broken=broken)
+
+
+def _divergence_findings(surfaces: dict) -> list:
+    return [
+        f for f in run_checks(CheckContext(surfaces=surfaces, ignore=SsotyIgnore())) if f.check == "content_divergence"
+    ]
+
+
+def test_content_divergence_trailing_whitespace_only_no_finding(tmp_path: Path):
+    a_path = tmp_path / "a" / "team-defaults.md"
+    b_path = tmp_path / "b" / "team-defaults.md"
+    a_path.parent.mkdir(parents=True)
+    b_path.parent.mkdir(parents=True)
+    a_path.write_text("line one\nline two", encoding="utf-8")
+    b_path.write_text("line one   \nline two\n", encoding="utf-8")  # trailing ws + blank
+    surfaces = {
+        "claude-code": HarnessSurface(
+            "claude-code", [_doc("claude-code", "team-defaults.md", a_path, "line one\nline two")]
+        ),
+        "cursor": HarnessSurface("cursor", [_doc("cursor", "team-defaults.md", b_path, "line one   \nline two\n")]),
+    }
+    assert _divergence_findings(surfaces) == []
+    from ssoty.diff import diff_pair
+
+    d = diff_pair(surfaces["claude-code"], surfaces["cursor"])
+    assert d.content_divergence == ()
+
+
+def test_content_divergence_one_word_drift_is_warning(tmp_path: Path):
+    a_path = tmp_path / "a" / "team-defaults.md"
+    b_path = tmp_path / "b" / "team-defaults.md"
+    a_path.parent.mkdir(parents=True)
+    b_path.parent.mkdir(parents=True)
+    a_path.write_text("always prefer composition", encoding="utf-8")
+    b_path.write_text("always prefer inheritance", encoding="utf-8")
+    surfaces = {
+        "claude-code": HarnessSurface(
+            "claude-code", [_doc("claude-code", "team-defaults.md", a_path, "always prefer composition")]
+        ),
+        "cursor": HarnessSurface("cursor", [_doc("cursor", "team-defaults.md", b_path, "always prefer inheritance")]),
+    }
+    found = _divergence_findings(surfaces)
+    assert len(found) == 1
+    f = found[0]
+    assert f.severity is Severity.WARNING
+    assert f.file == "team-defaults.md"
+    assert f.harness == "claude-code+cursor"
+    assert "claude-code" in f.message and "cursor" in f.message
+    from ssoty.diff import diff_pair
+
+    d = diff_pair(surfaces["claude-code"], surfaces["cursor"])
+    assert len(d.content_divergence) == 1
+    assert d.content_divergence[0].name == "team-defaults.md"
+    assert d.coherent is False
+
+
+def test_content_divergence_symlinked_ssot_no_finding(tmp_path: Path):
+    canonical = tmp_path / "canonical" / "team-defaults.md"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text("shared body", encoding="utf-8")
+    a_path = tmp_path / "a" / "team-defaults.md"
+    b_path = tmp_path / "b" / "team-defaults.md"
+    a_path.parent.mkdir(parents=True)
+    b_path.parent.mkdir(parents=True)
+    a_path.symlink_to(canonical)
+    b_path.symlink_to(canonical)
+    surfaces = {
+        "claude-code": HarnessSurface("claude-code", [_doc("claude-code", "team-defaults.md", a_path, "shared body")]),
+        "cursor": HarnessSurface("cursor", [_doc("cursor", "team-defaults.md", b_path, "shared body")]),
+    }
+    assert _divergence_findings(surfaces) == []
+    from ssoty.diff import diff_pair
+
+    d = diff_pair(surfaces["claude-code"], surfaces["cursor"])
+    assert d.content_divergence == ()
+    assert d.coherent is True
+
+
+def test_content_divergence_broken_skipped(tmp_path: Path):
+    a_path = tmp_path / "a" / "team-defaults.md"
+    b_path = tmp_path / "b" / "team-defaults.md"
+    a_path.parent.mkdir(parents=True)
+    b_path.parent.mkdir(parents=True)
+    a_path.write_text("real body", encoding="utf-8")
+    # b is broken: resolver would set text="" — must not be compared as divergence.
+    surfaces = {
+        "claude-code": HarnessSurface("claude-code", [_doc("claude-code", "team-defaults.md", a_path, "real body")]),
+        "cursor": HarnessSurface("cursor", [_doc("cursor", "team-defaults.md", b_path, "", broken=True)]),
+    }
+    assert _divergence_findings(surfaces) == []
+    from ssoty.diff import diff_pair
+
+    d = diff_pair(surfaces["claude-code"], surfaces["cursor"])
+    assert d.content_divergence == ()
+
+
+def test_content_divergence_deterministic(tmp_path: Path):
+    a_path = tmp_path / "a" / "team-defaults.md"
+    b_path = tmp_path / "b" / "team-defaults.md"
+    a_path.parent.mkdir(parents=True)
+    b_path.parent.mkdir(parents=True)
+    a_path.write_text("alpha", encoding="utf-8")
+    b_path.write_text("beta", encoding="utf-8")
+    surfaces = {
+        "claude-code": HarnessSurface("claude-code", [_doc("claude-code", "team-defaults.md", a_path, "alpha")]),
+        "cursor": HarnessSurface("cursor", [_doc("cursor", "team-defaults.md", b_path, "beta")]),
+    }
+    ctx = CheckContext(surfaces=surfaces, ignore=SsotyIgnore())
+    first = [(f.severity, f.check, f.harness, f.file, f.message) for f in run_checks(ctx)]
+    second = [(f.severity, f.check, f.harness, f.file, f.message) for f in run_checks(ctx)]
+    assert first == second

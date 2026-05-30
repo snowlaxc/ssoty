@@ -5,4 +5,4 @@ Deterministic, no LLM, no network. Reads agent-harness configuration
 consistently across harness boundaries.
 """
 
-__version__ = "0.1.9"
+__version__ = "0.1.10"
