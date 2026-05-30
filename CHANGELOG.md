@@ -5,6 +5,39 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](ht
 
 ## [Unreleased]
 
+## [0.1.9] — 2026-05-30
+### Changed
+- **`dangling_cross_ref` severity recalibrated — no longer emits Critical.** A reference
+  that resolves in *another* harness is by definition reachable somewhere, so flagging it
+  `Critical` ("config broken") misread intentional symlink/canonical SSOT layouts and could
+  false-block `--ci`. It now tiers as **Warning** (genuine cross-harness divergence worth a
+  look, non-blocking) and **FYI** (declared in `.ssotyignore`; the referencing doc is
+  canonically shared — same realpath symlinked into ≥2 harnesses; the target is a known
+  per-harness entrypoint; or the ref is not found in any surface). **`broken_symlink` is now
+  the sole structural `Critical`** — the only condition that means the config is actually
+  broken. `--ci` still exits non-zero on `broken_symlink`.
+### Fixed
+- **Three cross-harness dangling false positives eliminated** (precision, deterministic, no
+  new deps):
+  - `referenced_docs` now strips leading YAML frontmatter before scanning, so a
+    `source: ~/.codex/AGENTS.md` provenance line is no longer treated as a pointer. Gated on
+    the frontmatter containing a `key:` line so a leading `---` horizontal rule (not YAML)
+    keeps its body scanned.
+  - `referenced_docs` now drops entrypoint filenames (`CLAUDE.md`, `AGENTS.md`, …) that are
+    embedded in a glob/path allowlist list (e.g. ``Direct writes OK for: `~/.claude/**`,
+    `CLAUDE.md` ``) — a permission mention, not a pointer. A *lone* `.md` backtick in prose
+    is still a genuine pointer and still extracts. Markdown-link refs are never affected.
+  - `check_dangling_cross_ref` resolves canonical identity via `os.path.realpath`: a ref made
+    by a doc that is the same canonical file in ≥2 harnesses, and a ref *to* a known
+    entrypoint present elsewhere, both downgrade to FYI.
+- **`non_shared_surface` skips per-harness entrypoints.** `CLAUDE.md`/`AGENTS.md`/… are
+  tautologically "present only in one harness" by design and carry no divergence signal; a
+  genuine non-entrypoint rule present in one harness only still emits FYI.
+- **`duplicate_content` cross-harness sharing rolled up.** Expected cross-harness SSOT
+  sharing (once per harness, not token rent) now emits a single summary FYI (block count +
+  total tokens) instead of one FYI per block, so it cannot drown the tier. Within-harness
+  duplication (real token rent every turn) is unchanged — still one Warning per block.
+
 ## [0.1.8] — 2026-05-30
 ### Fixed
 - `ssoty fix` broken-symlink backup is now portable across Python 3.10–3.13.

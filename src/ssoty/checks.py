@@ -2,18 +2,21 @@
 
 No LLM, no network. Same input -> same output. The headline check is
 ``dangling_cross_ref`` which distinguishes a genuine cross-boundary dangling
-reference (Critical) from intentional, declared non-sharing (FYI).
+reference (Warning) from intentional, declared non-sharing, canonically-shared
+(symlink) pointers, and per-harness entrypoints (all FYI). The only structural
+Critical is ``broken_symlink`` — a symlink whose target does not resolve.
 """
 
 from __future__ import annotations
 
+import os
 import re
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
 from ssoty.ignore import SsotyIgnore
-from ssoty.models import ALWAYS_ON, Finding, HarnessSurface, Severity
+from ssoty.models import ALWAYS_ON, ENTRYPOINTS, Finding, HarnessSurface, Severity
 from ssoty.resolver import referenced_docs
 from ssoty.tokens import count_tokens
 
@@ -69,13 +72,33 @@ def check_broken_symlink(ctx: CheckContext) -> list[Finding]:
     return out
 
 
+def _canonically_shared_realpaths(ctx: CheckContext) -> set[str]:
+    """Realpaths that the SAME canonical file mounts into >=2 harness surfaces.
+
+    A canonical file symlinked into two harnesses shares one inode/realpath. When the
+    doc HOLDING a reference is such a file, a ref it makes is not a broken boundary — the
+    canonical doc is one shared SSOT and the pointer resolves wherever it is mounted.
+
+    Pure-filesystem and deterministic (``os.path.realpath`` only; no network/LLM). For
+    synthetic test docs with non-existent paths, realpath just normalizes to an absolute
+    path mounted in a single harness, so it never enters this set.
+    """
+    harnesses_by_realpath: dict[str, set[str]] = defaultdict(set)
+    for harness, surface in ctx.surfaces.items():
+        for doc in surface.docs:
+            harnesses_by_realpath[os.path.realpath(str(doc.path))].add(harness)
+    return {rp for rp, hs in harnesses_by_realpath.items() if len(hs) >= 2}
+
+
 def check_dangling_cross_ref(ctx: CheckContext) -> list[Finding]:
     out: list[Finding] = []
     names_by_harness = {h: s.names for h, s in ctx.surfaces.items()}
+    canonical_shared = _canonically_shared_realpaths(ctx)
     for harness, surface in ctx.surfaces.items():
         mine = names_by_harness[harness]
         others = {n for h, names in names_by_harness.items() if h != harness for n in names}
         for doc in surface.docs:
+            doc_is_canonical_shared = os.path.realpath(str(doc.path)) in canonical_shared
             for ref in sorted(referenced_docs(doc.text)):
                 if ref in mine:
                     continue
@@ -91,15 +114,39 @@ def check_dangling_cross_ref(ctx: CheckContext) -> list[Finding]:
                                 doc.name,
                             )
                         )
-                    else:
+                    elif doc_is_canonical_shared:
                         out.append(
                             Finding(
-                                Severity.CRITICAL,
+                                Severity.FYI,
                                 "dangling_cross_ref",
                                 harness,
                                 str(doc.path),
-                                f"references '{ref}', which exists in another harness but is NOT "
-                                f"loaded by '{harness}' — broken pointer across the harness boundary",
+                                f"references '{ref}'; referencing doc is canonically shared (symlink) "
+                                f"across harnesses — pointer resolves in the shared SSOT",
+                                doc.name,
+                            )
+                        )
+                    elif ref in ENTRYPOINTS:
+                        out.append(
+                            Finding(
+                                Severity.FYI,
+                                "dangling_cross_ref",
+                                harness,
+                                str(doc.path),
+                                f"references entrypoint '{ref}' owned by another harness — "
+                                f"per-harness entrypoint, resolves there",
+                                doc.name,
+                            )
+                        )
+                    else:
+                        out.append(
+                            Finding(
+                                Severity.WARNING,
+                                "dangling_cross_ref",
+                                harness,
+                                str(doc.path),
+                                f"references '{ref}' — present in another harness but not loaded "
+                                f"here; verify the pointer is reachable in this harness's context",
                                 doc.name,
                             )
                         )
@@ -151,6 +198,10 @@ def check_non_shared_surface(ctx: CheckContext) -> list[Finding]:
     for harness, surface in ctx.surfaces.items():
         elsewhere = {n for h, s in ctx.surfaces.items() if h != harness for n in s.names}
         for doc in surface.docs:
+            if doc.name in ENTRYPOINTS:
+                # per-harness entrypoint files are tautologically present-only-in-one
+                # by design (each harness owns its copy) — no divergence signal.
+                continue
             if doc.name not in elsewhere and len(all_harnesses) > 1:
                 out.append(
                     Finding(
@@ -177,6 +228,9 @@ def check_duplicate_content(ctx: CheckContext) -> list[Finding]:
             for para in _paragraphs(doc.text):
                 locations[para].append(f"{surface.harness}:{doc.name}")
     out: list[Finding] = []
+    cross_blocks = 0  # cross-harness-only duplicate blocks
+    cross_tokens = 0  # summed tokens across those blocks
+    cross_harnesses: set[str] = set()  # contributing harnesses, for a stable field
     for para, where in sorted(locations.items()):
         if len(where) < 2:
             continue
@@ -188,16 +242,33 @@ def check_duplicate_content(ctx: CheckContext) -> list[Finding]:
         dup_tokens = count_tokens(para)
         kind = "approx" if dup_tokens.approx else "exact"
         if within:
-            sev, note = Severity.WARNING, "duplicated within a harness (token rent every turn)"
+            # one Warning per duplicated block — actionable token rent.
+            out.append(
+                Finding(
+                    Severity.WARNING,
+                    "duplicate_content",
+                    "+".join(sorted(harnesses)),
+                    ", ".join(sorted(set(where))),
+                    f"identical {dup_tokens.tokens}-token block ({kind}, x{len(where)}) "
+                    f"duplicated within a harness (token rent every turn)",
+                    "",
+                )
+            )
         else:
-            sev, note = Severity.FYI, "shared across harnesses (expected SSOT sharing, not rent)"
+            # cross-harness-only expected SSOT sharing — accumulate, roll up into one FYI.
+            cross_blocks += 1
+            cross_tokens += dup_tokens.tokens
+            cross_harnesses |= harnesses
+    if cross_blocks:
         out.append(
             Finding(
-                sev,
+                Severity.FYI,
                 "duplicate_content",
-                "+".join(sorted(harnesses)),
-                ", ".join(sorted(set(where))),
-                f"identical {dup_tokens.tokens}-token block ({kind}, x{len(where)}) {note}",
+                "+".join(sorted(cross_harnesses)),
+                "+".join(sorted(cross_harnesses)),
+                f"{cross_blocks} identical blocks (~{cross_tokens} tokens total) shared across "
+                f"harnesses via expected SSOT sharing (symlink/canonical), not rent — suppressed "
+                f"per-block; see within-harness duplicate_content for actionable rent",
                 "",
             )
         )

@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from ssoty.models import ALWAYS_ON, CONDITIONAL, SKILL_GATED, HarnessSurface, RuleDoc
+from ssoty.models import ALWAYS_ON, CONDITIONAL, ENTRYPOINTS, SKILL_GATED, HarnessSurface, RuleDoc
 
 
 @dataclass(frozen=True)
@@ -201,23 +201,99 @@ def resolve_all(root: Path, specs: tuple[HarnessSpec, ...] = DEFAULT_SPECS) -> d
 _FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 # Markdown link: capture the .md path, tolerating a #fragment and/or a "title".
 _MD_LINK_RE = re.compile(r'\]\(\s*([^)\s#]+?\.md)(?:#[^)\s]*)?(?:\s+"[^"]*")?\s*\)', re.IGNORECASE)
-_BACKTICK_RE = re.compile(r"`([^`\n]+?\.md)`", re.IGNORECASE)
+# Any inline code span (not just .md) — used to detect glob/path siblings on a line.
+_BACKTICK_SPAN_RE = re.compile(r"`([^`\n]+?)`")
+# A backtick code span that names a ``.md`` file (basename or path).
+_BACKTICK_MD_RE = re.compile(r"^[^`\n]+?\.md$", re.IGNORECASE)
 # A real rule-doc filename: word chars, dot, dash only. Excludes prose
 # placeholders and globs such as `<topic>.md`, `*.md`, `<file>.md`.
 _VALID_DOC_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+\.md$", re.IGNORECASE)
+
+
+def _strip_frontmatter(text: str) -> str:
+    """Drop a leading YAML frontmatter block from ``text`` for ref extraction.
+
+    Frontmatter (``source: ~/.codex/AGENTS.md`` provenance, etc.) is metadata, never
+    a 'see X.md' pointer — the SAME strip-before-scan treatment already given to fenced
+    code. Reuses the ``\\n---`` closing-delimiter logic from ``_mdc_always_apply``.
+
+    Gated on the frontmatter containing a ``key:`` line so a document whose BODY merely
+    opens with a ``---`` horizontal rule (no YAML keys) is left intact — its content
+    must still be scanned for genuine pointers.
+    """
+    if not text.startswith("---"):
+        return text
+    end = text.find("\n---", 3)
+    if end == -1:
+        return text
+    frontmatter = text[3:end]
+    has_key = any(re.match(r"\s*[A-Za-z0-9_-]+\s*:", line) for line in frontmatter.splitlines())
+    if not has_key:
+        return text
+    # Drop through the closing delimiter line so the scanned body excludes the block.
+    rest = text[end + len("\n---") :]
+    newline = rest.find("\n")
+    return rest[newline + 1 :] if newline != -1 else ""
+
+
+def _is_glob_or_path_span(span: str) -> bool:
+    """True if an inline code span looks like a glob/path/allowlist token, not a pointer.
+
+    Matches the shapes that appear in a permission allowlist list such as
+    ``Direct writes OK for: `~/.claude/**`, `.omc/**`, `CLAUDE.md`, `AGENTS.md`.``:
+    glob (``**``/``*``), a trailing ``/`` (directory), or a leading ``~/`` / ``/`` / ``.``
+    (home/absolute/dotpath).
+    """
+    s = span.strip()
+    if not s:
+        return False
+    if "**" in s or "*" in s:
+        return True
+    if s.endswith("/"):
+        return True
+    return s.startswith(("~/", "/", "."))
+
+
+def _backtick_md_refs(body: str) -> list[str]:
+    """Inline-code ``.md`` refs, line-aware: drop bare-entrypoint mentions in an allowlist.
+
+    A genuine prose pointer is a LONE ``.md`` backtick in a sentence. A permission
+    allowlist is a comma-separated list of code spans where the ``.md`` token sits among
+    glob/path tokens. Per line: if the line carries a glob/path-like code span, exclude
+    bare-entrypoint ``.md`` spans (``CLAUDE.md`` etc.) on that line; otherwise keep all
+    ``.md`` spans. Markdown-link refs are handled separately and never affected here.
+    """
+    refs: list[str] = []
+    for line in body.splitlines():
+        spans = _BACKTICK_SPAN_RE.findall(line)
+        if not spans:
+            continue
+        line_has_glob = any(_is_glob_or_path_span(s) for s in spans)
+        for span in spans:
+            inner = span.strip()
+            if not _BACKTICK_MD_RE.match(inner):
+                continue
+            if line_has_glob and inner in ENTRYPOINTS:
+                continue  # entrypoint filename embedded in a glob/path allowlist = mention
+            refs.append(inner)
+    return refs
 
 
 def referenced_docs(text: str) -> set[str]:
     """Return basenames of ``*.md`` rule docs referenced from ``text``.
 
     Looks at markdown links ``](x.md)`` and inline code ``` `x.md` ```; fenced
-    code blocks are stripped first to avoid matching example snippets. Placeholder
-    and glob tokens (``<topic>.md``, ``*.md``) are rejected so they are not
-    reported as references.
+    code blocks and leading YAML frontmatter are stripped first to avoid matching
+    example snippets and provenance metadata. Placeholder and glob tokens
+    (``<topic>.md``, ``*.md``) are rejected so they are not reported as references.
+    Inline-code entrypoint filenames embedded in a glob/path allowlist list (a
+    permission allowlist, not a pointer) are also dropped; a lone ``.md`` backtick
+    in prose is still a genuine pointer and is kept.
     """
-    body = _FENCE_RE.sub("", text)
+    body = _strip_frontmatter(text)
+    body = _FENCE_RE.sub("", body)
     names: set[str] = set()
-    for match in _MD_LINK_RE.findall(body) + _BACKTICK_RE.findall(body):
+    for match in _MD_LINK_RE.findall(body) + _backtick_md_refs(body):
         name = match.replace("\\", "/").rsplit("/", 1)[-1].strip()
         if _VALID_DOC_NAME_RE.match(name):
             names.add(name)
