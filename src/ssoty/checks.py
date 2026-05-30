@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ssoty.ignore import SsotyIgnore
-from ssoty.models import ALWAYS_ON, ENTRYPOINTS, Finding, HarnessSurface, Severity
+from ssoty.models import ALWAYS_ON, ENTRYPOINTS, Finding, HarnessSurface, RuleDoc, Severity, normalize_content
 from ssoty.resolver import referenced_docs
 from ssoty.tokens import count_tokens
 
@@ -275,6 +275,56 @@ def check_duplicate_content(ctx: CheckContext) -> list[Finding]:
     return out
 
 
+def check_content_divergence(ctx: CheckContext) -> list[Finding]:
+    """Flag (Warning) a same-named rule whose CONTENT differs across non-shared copies.
+
+    The exact dual of ``_canonically_shared_realpaths``: a symlink-SSOT setup collapses
+    N mounts to ONE realpath (byte-identical by construction, silent here). This fires
+    precisely when that collapse did NOT happen AND the normalized text differs — the
+    only check that catches copy-instead-of-symlink drift. Orthogonal to load_asymmetry
+    (about load_basis): a rule can share load_basis yet diverge in content, or vice versa.
+
+    Group docs by name across all surfaces; for each name in >=2 harnesses, bucket the
+    docs by (realpath, normalized_text). Same-realpath docs (symlinked SSOT) collapse to
+    one bucket, so divergence requires >=2 DISTINCT realpaths with distinct normalized
+    text. Broken docs are skipped before bucketing (resolver sets text='' for broken
+    symlinks; an empty string would produce spurious divergence). One Warning per
+    diverging name (not per pair) for deterministic, low-noise output.
+    """
+    docs_by_name: dict[str, list[tuple[str, RuleDoc]]] = defaultdict(list)
+    for harness, surface in ctx.surfaces.items():
+        for doc in surface.docs:
+            docs_by_name[doc.name].append((harness, doc))
+    out: list[Finding] = []
+    for name in sorted(docs_by_name):
+        entries = docs_by_name[name]
+        live = [(h, d) for h, d in entries if not d.broken]
+        if len({h for h, _ in live}) < 2:
+            continue
+        buckets: set[tuple[str, str]] = set()
+        for _, doc in live:
+            realpath = os.path.realpath(str(doc.path))
+            buckets.add((realpath, normalize_content(doc.text)))
+        # Distinct normalized texts among non-shared copies. Same realpath collapses
+        # to one bucket; >1 distinct normalized text means divergent separate copies.
+        if len({norm for _, norm in buckets}) <= 1:
+            continue
+        harnesses = sorted({h for h, _ in live})
+        out.append(
+            Finding(
+                Severity.WARNING,
+                "content_divergence",
+                "+".join(harnesses),
+                name,
+                f"'{name}' has divergent content across harnesses ({', '.join(harnesses)}) — "
+                f"same filename, separate copies, normalized text differs; models enforce "
+                f"different versions (copy drift, not symlinked SSOT)",
+                name,
+            )
+        )
+    return out
+
+
 def check_skill_integrity(ctx: CheckContext) -> list[Finding]:
     if ctx.root is None:
         return []
@@ -365,6 +415,7 @@ ALL_CHECKS = (
     check_load_asymmetry,
     check_non_shared_surface,
     check_duplicate_content,
+    check_content_divergence,
     check_skill_integrity,
     check_weak_directive,
 )

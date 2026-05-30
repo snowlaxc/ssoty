@@ -17,9 +17,10 @@ input yields identical bytes.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
-from ssoty.models import HarnessSurface
+from ssoty.models import HarnessSurface, normalize_content
 from ssoty.resolver import referenced_docs
 
 
@@ -43,6 +44,15 @@ class BrokenCrossRef:
 
 
 @dataclass(frozen=True)
+class ContentDivergence:
+    """A rule name shared by both harnesses whose content differs across separate copies."""
+
+    name: str
+    a_path: str  # path of A's copy
+    b_path: str  # path of B's copy
+
+
+@dataclass(frozen=True)
 class SurfaceDiff:
     a: str  # harness A name
     b: str  # harness B name
@@ -51,10 +61,13 @@ class SurfaceDiff:
     shared: tuple[str, ...]  # rule names in both (sorted)
     different_load: tuple[LoadDivergence, ...]  # shared names whose basis differs (sorted by name)
     broken_cross_refs: tuple[BrokenCrossRef, ...]  # sorted by (src_harness, src_doc, ref)
+    content_divergence: tuple[ContentDivergence, ...]  # shared names, divergent content (sorted by name)
 
     @property
     def coherent(self) -> bool:
-        return not (self.only_in_a or self.only_in_b or self.different_load or self.broken_cross_refs)
+        return not (
+            self.only_in_a or self.only_in_b or self.different_load or self.broken_cross_refs or self.content_divergence
+        )
 
 
 def _broken_refs(src: HarnessSurface, other: HarnessSurface) -> list[BrokenCrossRef]:
@@ -93,6 +106,18 @@ def diff_pair(sa: HarnessSurface, sb: HarnessSurface) -> SurfaceDiff:
     broken = _broken_refs(sa, sb) + _broken_refs(sb, sa)
     broken.sort(key=lambda r: (r.src_harness, r.src_doc, r.ref))
 
+    divergent: list[ContentDivergence] = []
+    for name in shared:
+        da = sa.by_name(name)
+        db = sb.by_name(name)
+        if da is None or db is None or da.broken or db.broken:
+            continue
+        if os.path.realpath(str(da.path)) == os.path.realpath(str(db.path)):
+            # same canonical file symlinked into both — identical by construction.
+            continue
+        if normalize_content(da.text) != normalize_content(db.text):
+            divergent.append(ContentDivergence(name=name, a_path=str(da.path), b_path=str(db.path)))
+
     return SurfaceDiff(
         a=sa.harness,
         b=sb.harness,
@@ -101,4 +126,5 @@ def diff_pair(sa: HarnessSurface, sb: HarnessSurface) -> SurfaceDiff:
         shared=shared,
         different_load=tuple(different),
         broken_cross_refs=tuple(broken),
+        content_divergence=tuple(divergent),
     )

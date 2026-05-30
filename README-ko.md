@@ -50,6 +50,13 @@ $ uvx ssoty diff examples/messy-setup --a claude-code --b codex
 모든 쌍에 대해(--a/--b 생략) 또는 지정한 두 하네스를 비교합니다. `--json`/`--redact`
 지원, 명령은 엄격히 read-only입니다.
 
+로드 *방식*(존재/부재, always-on vs skill-gated)뿐 아니라 **내용 발산(content drift)**도
+잡습니다: 두 하네스가 **같은 파일명이지만 별개 복사본에서 다른 텍스트**(서로 다른
+`realpath`)를 가질 때 `same rule, divergent content` 카테고리가 발화합니다 — symlink 대신
+복사로 만들어 두 모델이 "같은" 룰의 서로 다른 버전을 조용히 강제하는 전형적 실수입니다.
+symlink로 공유된 단일 진실 출처(SSOT)는 하나의 `realpath`를 공유해 byte-identical이므로
+이 검사에 걸리지 않습니다 — SSOT collapse가 *일어나지 않은* 경우에만 정확히 발화합니다.
+
 ## 사용 예
 
 ```
@@ -97,6 +104,7 @@ codex       · skill-gated: 106 →   0 tokens
 | `broken_symlink` | Critical | target이 사라진 symlink 룰 (유일한 구조적 Critical) |
 | `dangling_cross_ref` | Warning / FYI | 이 하네스에 없는 형제 룰 참조 (Warning = 실제 하네스 간 발산; 의도 선언·canonical symlink 공유·하네스별 entrypoint·어디에도 없음이면 FYI) |
 | `load_asymmetry` | Warning | 같은 룰, 하네스마다 다른 로드 방식 |
+| `content_divergence` | Warning | ≥2 하네스에 같은 룰 *이름*이 있으나 별개 복사본(서로 다른 `realpath`)의 **내용**이 다름 — symlink 대신 복사로 인한 drift; symlink로 공유된 SSOT(같은 `realpath`)와 broken symlink은 제외 |
 | `duplicate_content` | Warning / FYI | 하네스 *내* 동일 블록 중복(Warning = 토큰 임대료); 하네스 *간* 예상된 SSOT 공유는 하나의 FYI로 롤업 |
 | `non_shared_surface` | FYI | 한 하네스에만 존재하는 non-entrypoint 룰 (하네스별 entrypoint는 제외) |
 | `skill_integrity` | Warning | `SKILL.md` 없는 스킬 디렉토리 |

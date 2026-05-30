@@ -29,6 +29,21 @@ ENTRYPOINTS = frozenset(
 )
 
 
+def normalize_content(text: str) -> str:
+    """Normalize rule text for content-divergence comparison.
+
+    Conservative and deterministic: handle CRLF vs LF (``splitlines``), drop the
+    most common benign drift (trailing whitespace per line), and drop leading/trailing
+    blank lines. Does NOT lowercase, collapse internal whitespace, strip markdown, or
+    sort lines — aggressive normalization would mask real drift (a changed word mid-line
+    IS divergence and must surface). Idempotent: same bytes every run.
+
+    Public (no leading underscore) and lives in models (which imports nothing internal)
+    so both checks.py and diff.py can import it with zero circular-import risk.
+    """
+    return "\n".join(line.rstrip() for line in text.splitlines()).strip("\n")
+
+
 class Severity(str, Enum):
     """Review severity labels (see team review conventions)."""
 
