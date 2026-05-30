@@ -53,6 +53,14 @@ $ uvx ssoty diff examples/messy-setup --a claude-code --b codex
 the same rules?* Run it across every present pair (omit `--a/--b`), or compare two
 named harnesses. `--json` and `--redact` supported; the command is strictly read-only.
 
+Beyond load *mechanics* (present/absent, always-on vs skill-gated), ssoty also catches
+**content drift**: a `same rule, divergent content` category fires when two harnesses
+carry the **same filename but different text in separate copies** (distinct `realpath`) —
+the classic copy-instead-of-symlink mistake where two models silently enforce different
+versions of the "same" rule. A symlinked single source of truth shares one `realpath` and
+is byte-identical by construction, so it never trips this; the warning fires precisely
+when the SSOT collapse did *not* happen.
+
 ## What ssoty does
 
 ```
@@ -112,6 +120,7 @@ Reproduce: `uvx ssoty metrics examples/messy-setup` (see [`benchmarks/REPORT.md`
 | `broken_symlink` | Critical | symlinked rule whose target is gone (the only structural Critical) |
 | `dangling_cross_ref` | Warning / FYI | a rule references a sibling absent in this harness (Warning = real cross-harness divergence; FYI if declared intentional, canonically-shared via symlink, a per-harness entrypoint, or not found anywhere) |
 | `load_asymmetry` | Warning | same rule, different load basis per harness |
+| `content_divergence` | Warning | same rule *name* in ≥2 harnesses whose **content** differs across separate copies (distinct `realpath`) — copy-instead-of-symlink drift; symlinked SSOT (shared `realpath`) and broken symlinks are excluded |
 | `duplicate_content` | Warning / FYI | identical blocks duplicated within a harness (Warning = token rent); cross-harness expected SSOT sharing rolled up into one FYI |
 | `non_shared_surface` | FYI | a non-entrypoint rule present in one harness only (per-harness entrypoints are skipped) |
 | `skill_integrity` | Warning | skill dir without a `SKILL.md` |

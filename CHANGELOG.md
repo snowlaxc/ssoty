@@ -5,6 +5,31 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](ht
 
 ## [Unreleased]
 
+## [0.1.10] — 2026-05-30
+### Added
+- **New check `content_divergence` (Warning).** For any rule *name* present in ≥2 harness
+  surfaces, ssoty now compares the docs' normalized text and flags the case where two
+  copies have the **same filename but divergent content and distinct `realpath`** — i.e. a
+  copy-instead-of-symlink drift where two models silently enforce different versions of the
+  "same" rule. This is the dual of the canonical-realpath insight: a symlinked SSOT collapses
+  N mounts to one `realpath` (byte-identical, never fires); `content_divergence` fires exactly
+  when that collapse did NOT happen. Orthogonal to `load_asymmetry` (which is about
+  `load_basis`, not content): a rule can share a load basis yet diverge in content, or vice
+  versa. Emits **one Warning per diverging name** (not per pair). Excludes: canonically-shared
+  (same-realpath) docs, broken symlinks (skipped before comparison so an empty `text` can't
+  fake divergence), and names present in only one harness. Entrypoints are *not* excluded —
+  two harnesses legitimately sharing one entrypoint filename drifting is a real signal.
+- **`ssoty diff A B` gained a `same rule, divergent content` category** mirroring the check
+  pairwise (text section, JSON `content_divergence` field, verdict tally), and it now counts
+  toward the pair's `coherent` verdict.
+- **`normalize_content(text)` in `models.py`** — conservative, deterministic normalization
+  (`splitlines` for CRLF/LF, `rstrip` per line, drop leading/trailing blank lines). Does NOT
+  lowercase, collapse internal whitespace, strip markdown, or sort lines, so a changed word
+  mid-line still surfaces as real drift. Shared by `checks.py` and `diff.py`.
+- **Audit trust line.** `ssoty audit` text output now prints `(R rule docs across H harnesses
+  checked)` and the JSON `summary` carries `rule_docs` / `harnesses`, so a clean report is
+  distinguishable from a no-op.
+
 ## [0.1.9] — 2026-05-30
 ### Changed
 - **`dangling_cross_ref` severity recalibrated — no longer emits Critical.** A reference
