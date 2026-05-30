@@ -144,6 +144,35 @@ ssoty fix --apply --scaffold-ignore   # 비공유 룰 이름을 .ssotyignore에 
 않으며, idempotent하다(다시 실행해도 아무 일 없음). 백업이 커밋되지 않도록
 `.ssoty-backup/`를 gitignore에 추가하라.
 
+### Sync — 감사자에서 관리자로 (dry-run + 백업 우선)
+`ssoty audit`는 하네스가 *갈라졌다고 알려준다*. `ssoty sync`는 *원인을 고친다*:
+**하나의 정규 룰 소스**를 모든 하네스 타깃에 심볼릭 링크로 배포해, 모든 모델이
+byte-identical한 파일(같은 inode)을 가리키게 만들어 divergence를 근본에서 무너뜨린다.
+감사자가 관리자가 된다 — 그리고 **sync가 쓰는 것이 곧 audit가 읽는 것**이므로 `audit`가
+자연스러운 사후 검증이 된다.
+
+```bash
+ssoty sync                      # DRY-RUN: 정확한 링크 계획만 출력, 아무것도 안 씀
+ssoty sync --apply              # 심볼릭 링크 생성/교체; 교체 대상은 먼저 백업
+ssoty sync --manifest ssoty.json --apply
+ssoty sync --apply && ssoty audit --ci   # 배포 후 CI에서 일관성 증명
+```
+
+Sync는 **`ssoty.json` manifest**(표준 라이브러리 JSON만 — 추가 의존성 없음)로 구동된다.
+읽기 전용 정규 `source` 트리와 그것이 링크될 하네스별 `target` 경로를 기술한다. 디렉터리
+타깃은 해석된 소스 basename마다 심볼릭 링크 하나씩, `CLAUDE.md` 같은 단일 파일 타깃은 링크
+하나를 받는다. [`examples/ssoty.json`](examples/ssoty.json) 참고.
+
+`ssoty fix`와 동일한 하드 안전장치: **기본이 dry-run**(정확한 계획만 출력, 아무것도 안 쓰고
+백업 디렉터리도 안 만듦), `--apply`만 변경한다. `--apply` 시, 기존 실파일이나 다른 곳을
+가리키는 심볼릭 링크를 교체하기 전에 그 노드를 `.ssoty-backup/<timestamp>/`(상대경로 보존)로
+백업한다 — link-aware라 교체되는 심볼릭 링크의 옛 타깃 문자열도 복구 가능하다. manifest에
+선언된 `target` 경로만 쓰고(루트를 벗어나는 타깃은 쓰기 전에 거부, exit 2), 정규 `source`는
+읽기 전용으로 취급한다. **idempotent**하며(두 번째 `--apply`는 순수 no-op, 새 백업 없음),
+*자기 자신이 만든* orphan 심볼릭 링크(정규 소스를 가리키지만 타깃이 사라진 링크)만 정리한다 —
+사용자의 무관한 심볼릭 링크는 절대 건드리지 않는다. `--method symlink`가 기본이자 현재
+유일한 방법이다.
+
 ### CI (GitHub Action)
 ```yaml
 - uses: snowlaxc/ssoty@v0
@@ -177,8 +206,8 @@ ssoty는 *당신의* config를 감사하며 출력이 룰을 그대로 인용할
 [`SECURITY.md`](SECURITY.md) 참고 — ssoty 출력을 공개 레포에 커밋하지 마세요.
 
 ## 로드맵 (phase 2)
-`ssoty fix`(자동 dedup), opt-in live "canary" 런타임 probe, LLM 의미 충돌 탐지,
-Gemini 지원, 마켓플레이스 패키징.
+`ssoty sync` 자동 dedup, `symlink`에 더해 `copy` 방식, opt-in live "canary" 런타임
+probe, LLM 의미 충돌 탐지, Gemini 지원, 마켓플레이스 패키징.
 
 ## 배경
 설계 근거는 [`docs/RFC.md`](docs/RFC.md)에 있습니다.

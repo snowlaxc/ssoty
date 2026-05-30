@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "method": "symlink",
+  "common": {
+    "sources": [
+      {"dir": "agent-rules/common", "pattern": "*.md"}
+    ]
+  },
+  "harnesses": {
+    "claude-code": {
+      "target": "~/.claude/rules",
+      "sources": [{"dir": "agent-rules/claude", "pattern": "*.md"}],
+      "common": true
+    },
+    "claude-code-entrypoint": {
+      "target": "~/.claude/CLAUDE.md",
+      "sources": [{"file": "agent-rules/CLAUDE.md"}],
+      "common": false
+    },
+    "codex": {
+      "target": "~/.codex/skills/global-agent-rules/references",
+      "sources": [{"dir": "agent-rules/codex", "pattern": "*.md"}],
+      "common": true
+    },
+    "cursor": {
+      "target": ".cursor/rules",
+      "sources": [{"dir": "agent-rules/cursor", "pattern": "*.mdc"}],
+      "common": false
+    }
+  }
+}

@@ -5,6 +5,39 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](ht
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-05-30
+### Added
+- **New `ssoty sync` command — from auditor to manager.** Where the read-only commands
+  *report* cross-harness divergence, `sync` *fixes the cause*: it distributes one read-only
+  canonical rule **source** as symlinks into every harness **target**, so all harnesses point
+  at byte-identical files (same inode) and content/load divergence collapses at the root.
+  The round-trip contract is deliberate — `sync` WRITES exactly the paths `audit` READS
+  (`.claude/rules`, `.claude/CLAUDE.md`, `.codex/skills/global-agent-rules/references`,
+  `.cursor/rules`, …) — so `ssoty sync --apply && ssoty audit --ci` is a coherent CI gate.
+- **`ssoty.json` manifest (stdlib JSON only).** Parsed with `json.load`; no tomllib/tomli/yaml
+  and `dependencies` stays `[]`. Schema mirrors the resolver's source model: a `common.sources`
+  block linked into every harness with `"common": true`, and per-harness `target` + `sources`
+  + `common` (bool). A directory target receives one symlink per resolved source basename; a
+  bare-file target (e.g. `CLAUDE.md`) receives exactly one link. Relative `dir`/`file`/`target`
+  paths resolve against the manifest's own directory (portable); `~` expands via
+  `os.path.expanduser`. Sample at [`examples/ssoty.json`](examples/ssoty.json).
+- **Hard safety, mirroring `ssoty fix`.** Dry-run is the DEFAULT (`ssoty sync` prints the exact
+  per-link plan — `<target-link> -> <source>` — and writes nothing, creating no backup dir);
+  only `--apply` mutates. On `--apply`, before replacing any existing real file or *differing*
+  symlink the node is backed up into `.ssoty-backup/<UTC>/` (path-preserving, reusing the `fix`
+  backup helpers — link-aware, so a replaced symlink's old target string stays recoverable).
+  Link classification mirrors `install.sh`'s `link_safe`: skip-unchanged / backup+relink /
+  backup-real-file / new-link, plus `cleanup_orphan_symlinks` (only links pointing INTO the
+  canonical source whose target vanished are removed; foreign links are never touched).
+  Idempotent: a second `--apply` on a synced tree produces zero backups and zero writes.
+- **`--method symlink`** (default and currently only method; reserved so a future `copy` is
+  additive), **`--manifest PATH`**, and **`--redact`** flags on `sync`. New `ssoty/sync.py`
+  holds the pure plan/apply logic; `cli.py` stays a thin dispatcher (`cmd_sync`).
+### Safety
+- Full manifest validation precedes the first mutation: a missing file, invalid JSON, or a
+  `target` escaping the sync root exits 2 (to stderr) with **no partial write**. Sync only ever
+  writes manifest-declared `target` paths and treats the canonical `source` as read-only.
+
 ## [0.1.10] — 2026-05-30
 ### Added
 - **New check `content_divergence` (Warning).** For any rule *name* present in ≥2 harness
