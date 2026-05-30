@@ -9,10 +9,11 @@
 **AI 코딩 에이전트용 정적 cross-harness 룰 발산(divergence) 감사기.**
 *두 모델, 하나의 "공유" 룰셋 — 그런데 정말 같은 룰로 동작할까? 대개 아니다.*
 
-`ssoty`는 여러 에이전트 하네스(Claude Code, Codex, Cursor, Copilot, Gemini, Cline)의
-effective 룰 표면을 읽어 — **결정적, LLM·네트워크 0** — 두 모델이 어디서 갈라지는지
-보여줍니다: 한 모델만 적용하고 다른 모델은 못 보는 룰, 공유하지만 *다른 보장*(always-on
-vs skill-gated)으로 로드되는 룰, 경계를 넘으며 깨지는 cross-reference. 턴당 토큰
+`ssoty`는 8개 에이전트 하네스(Claude Code, Codex, Cursor, Copilot, Gemini, Cline,
+Windsurf, Continue)의 effective 룰 표면을 읽어 — **결정적, LLM·네트워크 0** — 두
+모델이 어디서 갈라지는지 보여줍니다: 한 모델만 적용하고 다른 모델은 못 보는 룰,
+공유하지만 *다른 보장*(always-on vs skill-gated)으로 로드되는 룰, 같은 이름인데 복사본이
+조용히 **다른 내용으로 drift**한 룰, 경계를 넘으며 깨지는 cross-reference. 턴당 토큰
 비용("Context Tax")은 **부가 측정**으로 함께 제공합니다.
 
 ---
