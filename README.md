@@ -162,6 +162,50 @@ and, with `--scaffold-ignore`, recording intentionally non-shared rule names in
 is idempotent (running it again does nothing). Add `.ssoty-backup/` to your gitignore so
 backups are never committed.
 
+### Sync — from auditor to manager (dry-run + backup first)
+`ssoty audit` *tells you* harnesses diverged. `ssoty sync` *fixes the cause*: it
+distributes **one canonical rule source** as symlinks into every harness target, so all
+models point at byte-identical files (same inode) and divergence collapses at the root.
+The auditor becomes the manager — and `audit` becomes the natural post-condition check,
+since **sync writes exactly what audit reads**.
+
+```bash
+ssoty sync                      # DRY-RUN: prints the exact link plan, writes nothing
+ssoty sync --apply              # create/replace the symlinks; backs up anything it replaces
+ssoty sync --manifest ssoty.json --apply
+ssoty sync --apply && ssoty audit --ci   # distribute, then prove coherence in CI
+```
+
+Sync is driven by an **`ssoty.json` manifest** (stdlib JSON only — no extra
+dependencies) describing one read-only canonical `source` tree and the per-harness
+`target` paths it links into. A directory target receives one symlink per resolved
+source basename; a bare-file target (like `CLAUDE.md`) receives a single link. See
+[`examples/ssoty.json`](examples/ssoty.json):
+
+```json
+{
+  "version": 1,
+  "method": "symlink",
+  "common": { "sources": [{ "dir": "agent-rules/common", "pattern": "*.md" }] },
+  "harnesses": {
+    "claude-code":            { "target": "~/.claude/rules", "sources": [{ "dir": "agent-rules/claude" }], "common": true },
+    "claude-code-entrypoint": { "target": "~/.claude/CLAUDE.md", "sources": [{ "file": "agent-rules/CLAUDE.md" }] },
+    "codex":                  { "target": "~/.codex/skills/global-agent-rules/references", "sources": [{ "dir": "agent-rules/codex" }], "common": true }
+  }
+}
+```
+
+Hard safety, mirroring `ssoty fix`: **dry-run is the default** (the exact plan prints,
+nothing is written, no backup dir is created); only `--apply` mutates. On `--apply`,
+before replacing any existing real file or differing symlink it backs up the node into
+`.ssoty-backup/<timestamp>/` (path-preserving) — link-aware, so a replaced symlink's old
+target string is recoverable. It only ever writes the manifest-declared `target` paths
+(a target escaping the root is rejected, exit 2, before any write) and treats the
+canonical `source` as read-only. It is **idempotent** (a second `--apply` is a pure
+no-op, no new backups) and cleans only *its own* orphaned symlinks (links pointing into
+the canonical source whose target vanished) — your unrelated symlinks are never touched.
+`--method symlink` is the default and currently only method.
+
 ### CI (GitHub Action)
 ```yaml
 - uses: snowlaxc/ssoty@v0
@@ -196,7 +240,8 @@ ssoty audits *your* config; its output can quote your rules verbatim. It runs
 only**. See [`SECURITY.md`](SECURITY.md). Never commit ssoty output to a public repo.
 
 ## Roadmap (phase 2)
-`ssoty fix` (auto-dedup), opt-in live "canary" runtime probe, LLM semantic
+`ssoty sync` auto-dedup, a `copy` method alongside `symlink`, opt-in live "canary"
+runtime probe, LLM semantic
 conflict detection, Gemini support, marketplace packaging.
 
 ## Background
