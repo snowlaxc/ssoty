@@ -8,6 +8,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](ht
 - Release workflow triggers only on full semver tags (`v*.*.*`) so moving the
   floating `v0` tag no longer starts a duplicate publish; publish is `skip-existing`.
 
+## [0.1.5] — 2026-05-30
+### Added
+- **`ssoty fix`** — safe, DRY-RUN-first remediation of audit findings. Default prints
+  exactly what *would* change and writes nothing; mutation requires explicit `--apply`.
+  On `--apply`, every touched file is first copied into a timestamped, path-preserving
+  backup dir under the audited root (`.ssoty-backup/<UTC-timestamp>/`) and its location
+  is printed before any change. Safe remediations only: (1) remove a *broken* symlink
+  (its target does not resolve, so nothing real is lost; re-stat guard at apply time),
+  and (2) with `--scaffold-ignore`, append intentionally non-shared rule names to
+  `.ssotyignore` (a file ssoty owns, skipping already-declared names). It never edits
+  real rule files, never touches a valid symlink, and is idempotent (a second `--apply`
+  finds no work, creating no new backup). `--redact` masks home paths/emails like the
+  other subcommands. Add `.ssoty-backup/` to your gitignore so backups are never
+  committed. Implemented in a new dependency-free `fix.py`; stdlib only, deterministic.
+
 ## [0.1.4] — 2026-05-29
 ### Added
 - **Cline** harness support: `.clinerules/` directory (all rule files, always-on),

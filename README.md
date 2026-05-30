@@ -102,6 +102,23 @@ ssoty audit --format sarif      # SARIF 2.1.0 (for github/codeql-action/upload-s
 `--format {text,json,sarif}` selects the audit output (default `text`); `--json` is
 a back-compat alias for `--format json`.
 
+### Fix (dry-run + backup first)
+```bash
+ssoty fix                       # DRY-RUN: prints what WOULD change, writes nothing
+ssoty fix --apply               # perform safe fixes; backs every touched file up first
+ssoty fix --apply --scaffold-ignore   # also append non-shared rule names to .ssotyignore
+```
+
+`ssoty fix` is **dry-run by default** — it prints exactly what it would do and changes
+nothing. Only `--apply` writes, and even then it first copies every file it will touch
+into a timestamped backup dir under the audited root (`.ssoty-backup/<timestamp>/`,
+path-preserving) and prints that location. It performs only **safe** remediations:
+removing a *broken* symlink (its target does not resolve, so no real content is lost)
+and, with `--scaffold-ignore`, recording intentionally non-shared rule names in
+`.ssotyignore`. It never edits your real rule files, never touches a valid symlink, and
+is idempotent (running it again does nothing). Add `.ssoty-backup/` to your gitignore so
+backups are never committed.
+
 ### CI (GitHub Action)
 ```yaml
 - uses: snowlaxc/ssoty@v0

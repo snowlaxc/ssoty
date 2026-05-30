@@ -4,6 +4,7 @@ Usage:
     ssoty audit   [PATH] [--format {text,json,sarif}] [--json] [--redact] [--ci]
     ssoty metrics [PATH] [--json] [--redact]
     ssoty resolve [PATH] [--json] [--redact]
+    ssoty fix     [PATH] [--apply] [--redact] [--scaffold-ignore]
 
 PATH is the root that contains ``.claude`` / ``.codex`` (defaults to $HOME).
 For fixtures, pass the fixture dir, e.g. ``ssoty audit examples/messy-setup``.
@@ -18,6 +19,13 @@ from pathlib import Path
 
 from ssoty import __version__
 from ssoty.checks import CheckContext, run_checks
+from ssoty.fix import (
+    apply_remediations,
+    ensure_backup_dir,
+    plan_remediations,
+    render_apply_text,
+    render_plan_text,
+)
 from ssoty.ignore import SsotyIgnore
 from ssoty.metrics import HarnessTax, compute_context_tax
 from ssoty.models import AuditResult
@@ -84,6 +92,25 @@ def cmd_resolve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_fix(args: argparse.Namespace) -> int:
+    root = _resolve_root(args.path)
+    result, _ = build(root)
+    redactor = _redactor(args.redact)
+    plan = plan_remediations(result, root, scaffold_ignore=args.scaffold_ignore)
+    if not args.apply:
+        # Dry-run is the DEFAULT: print exactly what WOULD change, write nothing.
+        print(redactor(render_plan_text(plan)))
+        return 0
+    if not plan:
+        # No work -> create no backup dir, write nothing (idempotent).
+        print(redactor(render_plan_text(plan)))
+        return 0
+    backup_dir = ensure_backup_dir(root)
+    results = apply_remediations(plan, root, backup_dir)
+    print(redactor(render_apply_text(backup_dir, results)))
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ssoty", description="Static cross-harness rule coherence auditor.")
     parser.add_argument("--version", action="version", version=f"ssoty {__version__}")
@@ -113,6 +140,17 @@ def _build_parser() -> argparse.ArgumentParser:
     resolve.add_argument("--json", action="store_true", help="emit JSON")
     resolve.add_argument("--redact", action="store_true", help="mask home paths and emails")
     resolve.set_defaults(func=cmd_resolve)
+
+    fix = sub.add_parser("fix", help="safely remediate findings (DRY-RUN by default)")
+    fix.add_argument("path", nargs="?", help="root containing .claude/.codex (default: $HOME)")
+    fix.add_argument("--apply", action="store_true", help="perform changes (default: dry-run, writes nothing)")
+    fix.add_argument("--redact", action="store_true", help="mask home paths and emails")
+    fix.add_argument(
+        "--scaffold-ignore",
+        action="store_true",
+        help="also append intentionally non-shared rule names to .ssotyignore",
+    )
+    fix.set_defaults(func=cmd_fix)
     return parser
 
 

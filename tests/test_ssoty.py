@@ -412,3 +412,151 @@ def test_robust_on_nonexistent_root(tmp_path: Path, capsys):
     assert main(["resolve", str(empty)]) == 0
     result, tax = build(empty)
     assert result.findings == []
+
+
+# --- fix: dry-run-first, backup-first, idempotent remediation ---
+
+
+def _make_broken_symlink(root: Path, name: str = "x.md", target: str = "does-not-exist.md") -> Path:
+    rules = root / ".claude" / "rules"
+    rules.mkdir(parents=True, exist_ok=True)
+    link = rules / name
+    link.symlink_to(target)
+    return link
+
+
+def test_fix_dry_run_changes_nothing(tmp_path: Path, capsys):
+    link = _make_broken_symlink(tmp_path)
+    # default (no --apply) is dry-run
+    assert main(["fix", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "WOULD remove broken symlink" in out
+    # nothing mutated, no backup dir created
+    assert link.is_symlink() and not link.exists()
+    assert not (tmp_path / ".ssoty-backup").exists()
+
+
+def test_fix_apply_removes_broken_symlink_and_backs_up(tmp_path: Path, capsys):
+    link = _make_broken_symlink(tmp_path, target="./nope.md")
+    assert main(["fix", str(tmp_path), "--apply"]) == 0
+    out = capsys.readouterr().out
+    assert "backup written to:" in out
+    assert "removed broken symlink" in out
+    # the dangling symlink is gone
+    assert not link.is_symlink()
+    # a backup of the link node exists, preserving the dead target string
+    backups = list((tmp_path / ".ssoty-backup").glob("*/.claude/rules/x.md"))
+    assert len(backups) == 1
+    backup = backups[0]
+    assert backup.is_symlink()
+    import os
+
+    assert os.readlink(backup) == "./nope.md"
+
+
+def test_fix_apply_is_idempotent(tmp_path: Path, capsys):
+    _make_broken_symlink(tmp_path)
+    assert main(["fix", str(tmp_path), "--apply"]) == 0
+    capsys.readouterr()
+    backups_after_first = sorted((tmp_path / ".ssoty-backup").glob("*"))
+    assert len(backups_after_first) == 1
+    # second apply: nothing to do, creates no new backup dir, writes nothing
+    assert main(["fix", str(tmp_path), "--apply"]) == 0
+    out = capsys.readouterr().out
+    assert "nothing to do" in out
+    assert sorted((tmp_path / ".ssoty-backup").glob("*")) == backups_after_first
+
+
+def test_fix_never_touches_valid_symlink_or_real_file(tmp_path: Path, capsys):
+    rules = tmp_path / ".claude" / "rules"
+    rules.mkdir(parents=True)
+    # a real rule file
+    real = rules / "real.md"
+    real.write_text("synthetic rule for /home/dev", encoding="utf-8")
+    # a VALID symlink (target resolves)
+    target = rules / "target.md"
+    target.write_text("synthetic target", encoding="utf-8")
+    valid_link = rules / "valid.md"
+    valid_link.symlink_to("target.md")
+    # plus one broken symlink so there IS work
+    _make_broken_symlink(tmp_path, name="dead.md")
+
+    assert main(["fix", str(tmp_path), "--apply"]) == 0
+    capsys.readouterr()
+    # real file + valid symlink survive untouched
+    assert real.is_file() and real.read_text(encoding="utf-8") == "synthetic rule for /home/dev"
+    assert valid_link.is_symlink() and valid_link.exists()
+    # only the broken one was removed
+    assert not (rules / "dead.md").is_symlink()
+
+
+def test_fix_scaffold_ignore_appends_non_shared(tmp_path: Path, capsys):
+    # two harnesses present; a rule only in claude-code is a non_shared_surface FYI
+    claude_rules = tmp_path / ".claude" / "rules"
+    claude_rules.mkdir(parents=True)
+    (claude_rules / "solo.md").write_text("synthetic claude-only rule", encoding="utf-8")
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github" / "copilot-instructions.md").write_text("synthetic copilot rule", encoding="utf-8")
+
+    # without --scaffold-ignore, no .ssotyignore append
+    assert main(["fix", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "WOULD append to .ssotyignore" not in out
+
+    # dry-run with --scaffold-ignore shows the WOULD line, writes nothing
+    assert main(["fix", str(tmp_path), "--scaffold-ignore"]) == 0
+    out = capsys.readouterr().out
+    assert "WOULD append to .ssotyignore: solo.md" in out
+    assert not (tmp_path / ".ssotyignore").exists()
+
+    # apply with --scaffold-ignore creates .ssotyignore with the name
+    assert main(["fix", str(tmp_path), "--apply", "--scaffold-ignore"]) == 0
+    capsys.readouterr()
+    ig = SsotyIgnore.load(tmp_path)
+    assert ig.declares("solo.md")
+    assert ig.declares("copilot-instructions.md")
+
+
+def test_fix_scaffold_ignore_skips_already_declared(tmp_path: Path, capsys):
+    claude_rules = tmp_path / ".claude" / "rules"
+    claude_rules.mkdir(parents=True)
+    (claude_rules / "solo.md").write_text("synthetic claude-only rule", encoding="utf-8")
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github" / "copilot-instructions.md").write_text("synthetic copilot rule", encoding="utf-8")
+    # pre-declare solo.md
+    (tmp_path / ".ssotyignore").write_text("solo.md\n", encoding="utf-8")
+
+    assert main(["fix", str(tmp_path), "--scaffold-ignore"]) == 0
+    out = capsys.readouterr().out
+    # solo.md is already declared -> not offered again; copilot one still offered
+    assert "WOULD append to .ssotyignore: solo.md" not in out
+    assert "WOULD append to .ssotyignore: copilot-instructions.md" in out
+
+
+def test_fix_apply_empty_plan_creates_no_backup(tmp_path: Path, capsys):
+    # a clean root with no broken symlinks: --apply creates no backup dir
+    claude_rules = tmp_path / ".claude" / "rules"
+    claude_rules.mkdir(parents=True)
+    (claude_rules / "a.md").write_text("synthetic rule", encoding="utf-8")
+    assert main(["fix", str(tmp_path), "--apply"]) == 0
+    out = capsys.readouterr().out
+    assert "nothing to do" in out
+    assert not (tmp_path / ".ssoty-backup").exists()
+
+
+def test_fix_redact_masks_home_in_output(tmp_path: Path, capsys):
+    _make_broken_symlink(tmp_path)
+    home = str(tmp_path)
+    monkey_home = home  # the fixture path stands in for $HOME via --redact
+    import ssoty.redact as r
+
+    # point redact's home at the tmp root so the printed path is masked
+    orig = r.os.path.expanduser
+    r.os.path.expanduser = lambda p: monkey_home if p == "~" else orig(p)
+    try:
+        assert main(["fix", str(tmp_path), "--redact"]) == 0
+        out = capsys.readouterr().out
+    finally:
+        r.os.path.expanduser = orig
+    assert home not in out
+    assert "$HOME" in out

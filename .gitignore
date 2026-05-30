@@ -7,6 +7,8 @@
 *.ssoty.txt
 ssoty-report.*
 audit-output/
+# `ssoty fix --apply` writes backups of the audited root here — same leak risk.
+.ssoty-backup/
 *.snapshot.json
 *.local.*
 

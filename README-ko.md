@@ -89,6 +89,22 @@ ssoty audit --format sarif      # SARIF 2.1.0 (github/codeql-action/upload-sarif
 `--format {text,json,sarif}`로 audit 출력 형식 선택(기본 `text`); `--json`은
 `--format json`의 하위호환 alias.
 
+### Fix (dry-run + 백업 우선)
+```bash
+ssoty fix                       # DRY-RUN: 무엇이 바뀔지만 출력, 아무것도 안 씀
+ssoty fix --apply               # 안전한 수정 수행; 손대는 파일을 먼저 모두 백업
+ssoty fix --apply --scaffold-ignore   # 비공유 룰 이름을 .ssotyignore에 추가까지
+```
+
+`ssoty fix`는 **기본이 dry-run**이다 — 무엇을 할지 그대로 출력하고 아무것도 바꾸지
+않는다. `--apply`를 줘야만 쓰며, 그때도 손댈 파일을 먼저 감사 루트 아래 타임스탬프
+백업 디렉터리(`.ssoty-backup/<timestamp>/`, 상대경로 보존)로 복사하고 그 위치를
+출력한다. **안전한** 수정만 한다: 깨진 심볼릭 링크 제거(타깃이 해석되지 않으므로
+실제 내용 손실 없음), 그리고 `--scaffold-ignore` 시 의도적으로 비공유인 룰 이름을
+`.ssotyignore`에 기록. 실제 룰 파일을 편집하지 않고, 정상 심볼릭 링크를 건드리지
+않으며, idempotent하다(다시 실행해도 아무 일 없음). 백업이 커밋되지 않도록
+`.ssoty-backup/`를 gitignore에 추가하라.
+
 ### CI (GitHub Action)
 ```yaml
 - uses: snowlaxc/ssoty@v0
