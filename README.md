@@ -9,12 +9,14 @@
 **Static cross-harness rule DIVERGENCE auditor for AI coding agents.**
 *Two models, one "shared" rule set — but do they actually operate under the same rules? Usually not.*
 
-`ssoty` reads the effective rule surfaces of multiple agent harnesses (Claude Code,
-Codex, Cursor, Copilot, Gemini, Cline) and shows — **deterministically, with no LLM
-and no network** — where two models diverge: which rules one model applies that the
-other never sees, which shared rules load under a *different guarantee* (always-on vs
-skill-gated), and which cross-references break across the boundary. It also quantifies
-the per-turn token cost ("Context Tax") as a secondary metric.
+`ssoty` reads the effective rule surfaces of eight agent harnesses (Claude Code,
+Codex, Cursor, Copilot, Gemini, Cline, Windsurf, Continue) and shows —
+**deterministically, with no LLM and no network** — where two models diverge:
+which rules one model applies that the other never sees, which shared rules load
+under a *different guarantee* (always-on vs skill-gated), which same-named copies
+have silently **drifted to different content**, and which cross-references break
+across the boundary. It also quantifies the per-turn token cost ("Context Tax")
+as a secondary metric.
 
 ---
 
