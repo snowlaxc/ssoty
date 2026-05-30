@@ -7,6 +7,7 @@ from collections.abc import Callable
 
 from ssoty import __version__
 from ssoty.checks import ALL_CHECKS
+from ssoty.diff import SurfaceDiff
 from ssoty.metrics import HarnessTax
 from ssoty.models import AuditResult, Finding, HarnessSurface, Severity
 from ssoty.tokens import count_tokens
@@ -174,3 +175,83 @@ def render_resolve_text(surfaces: dict[str, HarnessSurface], redactor: Callable[
 
 def render_resolve_json(surfaces: dict[str, HarnessSurface], redactor: Callable[[str], str] = _IDENTITY) -> str:
     return redactor(json.dumps(_doc_rows(surfaces), indent=2, sort_keys=True))
+
+
+# --- diff (cross-model rule divergence) ---
+
+
+def _verdict_text(d: SurfaceDiff) -> str:
+    if d.coherent:
+        return f"{d.a} and {d.b} operate under the same effective rules"
+    return f"{d.a} and {d.b} do NOT operate under the same rules"
+
+
+def _verdict_tally(d: SurfaceDiff) -> str:
+    """Parenthetical count of each non-empty divergence category (incoherent only)."""
+    parts: list[str] = []
+    if d.only_in_a:
+        parts.append(f"{len(d.only_in_a)} rule{'s' if len(d.only_in_a) != 1 else ''} only in {d.a}")
+    if d.only_in_b:
+        parts.append(f"{len(d.only_in_b)} rule{'s' if len(d.only_in_b) != 1 else ''} only in {d.b}")
+    if d.different_load:
+        parts.append(f"{len(d.different_load)} loads differently")
+    if d.broken_cross_refs:
+        n = len(d.broken_cross_refs)
+        parts.append(f"{n} broken cross-ref{'s' if n != 1 else ''}")
+    return ", ".join(parts)
+
+
+def render_diff_text(diffs: list[SurfaceDiff], redactor: Callable[[str], str] = _IDENTITY) -> str:
+    lines = ["ssoty diff — effective rule divergence between harnesses", ""]
+    for d in diffs:
+        lines.append(f"  {d.a}  vs  {d.b}")
+        if d.only_in_a:
+            lines.append(f"      only in {d.a} ({len(d.only_in_a)}): {', '.join(d.only_in_a)}")
+        if d.only_in_b:
+            lines.append(f"      only in {d.b} ({len(d.only_in_b)}): {', '.join(d.only_in_b)}")
+        if d.different_load:
+            lines.append(f"      same rule, different load ({len(d.different_load)}):")
+            for ld in d.different_load:
+                lines.append(f"          {ld.name}  {d.a}={ld.a_basis}  |  {d.b}={ld.b_basis}")
+        if d.broken_cross_refs:
+            lines.append(f"      broken cross-references across the boundary ({len(d.broken_cross_refs)}):")
+            for ref in d.broken_cross_refs:
+                lines.append(
+                    f"          {ref.src_harness}:{ref.src_doc} -> '{ref.ref}'  "
+                    f"(loads only in {ref.present_in}, NOT in {ref.src_harness})"
+                )
+        if d.coherent:
+            lines.append(f"      VERDICT: {_verdict_text(d)}")
+        else:
+            lines.append(f"      VERDICT: {_verdict_text(d)}")
+            lines.append(f"               ({_verdict_tally(d)})")
+        lines.append("")
+    return redactor("\n".join(lines).rstrip())
+
+
+def render_diff_json(diffs: list[SurfaceDiff], redactor: Callable[[str], str] = _IDENTITY) -> str:
+    payload = [
+        {
+            "a": d.a,
+            "b": d.b,
+            "only_in_a": list(d.only_in_a),
+            "only_in_b": list(d.only_in_b),
+            "shared": list(d.shared),
+            "different_load": [
+                {"name": ld.name, "a_basis": ld.a_basis, "b_basis": ld.b_basis} for ld in d.different_load
+            ],
+            "broken_cross_refs": [
+                {
+                    "src_harness": ref.src_harness,
+                    "src_doc": ref.src_doc,
+                    "ref": ref.ref,
+                    "present_in": ref.present_in,
+                }
+                for ref in d.broken_cross_refs
+            ],
+            "coherent": d.coherent,
+            "verdict": _verdict_text(d),
+        }
+        for d in diffs
+    ]
+    return redactor(json.dumps(payload, indent=2, sort_keys=True))

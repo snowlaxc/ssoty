@@ -1,6 +1,7 @@
 """``ssoty`` command-line entry point.
 
 Usage:
+    ssoty diff    [PATH] [--a HARNESS --b HARNESS] [--json] [--redact]
     ssoty audit   [PATH] [--format {text,json,sarif}] [--json] [--redact] [--ci]
     ssoty metrics [PATH] [--json] [--redact]
     ssoty resolve [PATH] [--json] [--redact]
@@ -19,6 +20,7 @@ from pathlib import Path
 
 from ssoty import __version__
 from ssoty.checks import CheckContext, run_checks
+from ssoty.diff import diff_pair
 from ssoty.fix import (
     apply_remediations,
     ensure_backup_dir,
@@ -31,6 +33,8 @@ from ssoty.metrics import HarnessTax, compute_context_tax
 from ssoty.models import AuditResult
 from ssoty.redact import redact
 from ssoty.report import (
+    render_diff_json,
+    render_diff_text,
     render_findings_text,
     render_json,
     render_metrics_text,
@@ -92,6 +96,32 @@ def cmd_resolve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_diff(args: argparse.Namespace) -> int:
+    surfaces = resolve_all(_resolve_root(args.path))  # read-only; same as resolve
+    redactor = _redactor(args.redact)
+    if (args.a is None) != (args.b is None):
+        print("ssoty diff: --a and --b must be given together", file=sys.stderr)
+        return 2
+    if args.a is not None:
+        missing = [h for h in (args.a, args.b) if h not in surfaces]
+        if missing:
+            print(
+                f"ssoty diff: harness not present: {', '.join(missing)} " f"(present: {', '.join(sorted(surfaces))})",
+                file=sys.stderr,
+            )
+            return 2
+        pairs = [(args.a, args.b)]
+    else:
+        present = sorted(surfaces)
+        pairs = [(a, b) for i, a in enumerate(present) for b in present[i + 1 :]]
+    diffs = [diff_pair(surfaces[a], surfaces[b]) for a, b in pairs]
+    if args.json:
+        print(render_diff_json(diffs, redactor))
+    else:
+        print(render_diff_text(diffs, redactor))
+    return 0
+
+
 def cmd_fix(args: argparse.Namespace) -> int:
     root = _resolve_root(args.path)
     result, _ = build(root)
@@ -128,6 +158,16 @@ def _build_parser() -> argparse.ArgumentParser:
     audit.add_argument("--redact", action="store_true", help="mask home paths and emails")
     audit.add_argument("--ci", action="store_true", help="exit non-zero on any Critical finding")
     audit.set_defaults(func=cmd_audit)
+
+    diff = sub.add_parser("diff", help="compare effective rule surfaces of two harnesses (divergence)")
+    diff.add_argument("path", nargs="?", help="root containing .claude/.codex (default: $HOME)")
+    diff.add_argument(
+        "--a", dest="a", metavar="HARNESS", help="first harness (omit both --a/--b to diff all present pairs)"
+    )
+    diff.add_argument("--b", dest="b", metavar="HARNESS", help="second harness")
+    diff.add_argument("--json", action="store_true", help="emit JSON")
+    diff.add_argument("--redact", action="store_true", help="mask home paths and emails")
+    diff.set_defaults(func=cmd_diff)
 
     metrics = sub.add_parser("metrics", help="report Context Tax per harness")
     metrics.add_argument("path", nargs="?", help="root containing .claude/.codex (default: $HOME)")

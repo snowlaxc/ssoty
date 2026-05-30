@@ -8,6 +8,26 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](ht
 - Release workflow triggers only on full semver tags (`v*.*.*`) so moving the
   floating `v0` tag no longer starts a duplicate publish; publish is `skip-existing`.
 
+## [0.1.6] — 2026-05-30
+### Added
+- **`ssoty diff`** — cross-model rule **divergence** between two harnesses, the new
+  headline. Answers the one question that matters: *do these two models operate under
+  the same effective rules?* For an ordered pair (A, B) it reports rules only in A,
+  rules only in B, shared rules that load under a *different guarantee* (always-on vs
+  skill-gated), and cross-references that break across the boundary (a doc in A points
+  at a rule that loads only in B). Omit `--a/--b` to diff every present pair
+  (deterministic, each unordered pair once); name two with `--a X --b Y`. `--json` and
+  `--redact` mirror `resolve`/`metrics`. Strictly **read-only** — like `resolve`, it
+  only resolves surfaces and prints; it never writes, backs up, or imports `fix`. Exit
+  0 on success (informational, not a gate — use `audit --ci` to gate); exit 2 only on a
+  usage error (unknown/half-specified harness). New dependency-free `diff.py`; stdlib
+  only, deterministic, no LLM, no network.
+### Changed
+- README / README-ko reframed so the opening pitch is cross-model rule **divergence**
+  ("your Claude and your Codex apply different rules"); `duplicate_content` / Context
+  Tax is demoted to a clearly secondary "also measures" metric. No checks, metrics, or
+  behavior removed — only reordered and relabeled.
+
 ## [0.1.5] — 2026-05-30
 ### Added
 - **`ssoty fix`** — safe, DRY-RUN-first remediation of audit findings. Default prints

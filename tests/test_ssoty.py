@@ -414,6 +414,134 @@ def test_robust_on_nonexistent_root(tmp_path: Path, capsys):
     assert result.findings == []
 
 
+# --- diff: cross-model rule divergence ---
+
+
+def _diverging_root(tmp_path: Path) -> Path:
+    """Two harnesses with: only-in-A, only-in-B, a shared rule with different
+    load_basis, and a cross-boundary broken ref. claude-code (always-on) vs codex
+    (skill-gated references)."""
+    claude_rules = tmp_path / ".claude" / "rules"
+    claude_rules.mkdir(parents=True)
+    # shared rule (claude=always-on) + a claude-only rule the ref points at
+    (claude_rules / "shared-style.md").write_text("shared rule body", encoding="utf-8")
+    (claude_rules / "team-rules.md").write_text("synthetic team rule for /home/dev", encoding="utf-8")
+    # codex: same shared-style.md (skill-gated) that references a claude-only rule,
+    # plus a codex-only rule
+    refs = tmp_path / ".codex" / "skills" / "global-agent-rules" / "references"
+    refs.mkdir(parents=True)
+    (refs / "shared-style.md").write_text("see `team-rules.md` for details", encoding="utf-8")
+    (refs / "codex-only.md").write_text("synthetic codex-only rule", encoding="utf-8")
+    return tmp_path
+
+
+def test_diff_pair_surfaces_every_category(tmp_path: Path):
+    from ssoty.diff import diff_pair
+
+    surfaces = resolve_all(_diverging_root(tmp_path))
+    d = diff_pair(surfaces["claude-code"], surfaces["codex"])
+    assert d.a == "claude-code" and d.b == "codex"
+    assert "team-rules.md" in d.only_in_a
+    assert "codex-only.md" in d.only_in_b
+    assert "shared-style.md" in d.shared
+    assert any(ld.name == "shared-style.md" for ld in d.different_load)
+    ld = next(ld for ld in d.different_load if ld.name == "shared-style.md")
+    assert ld.a_basis == ALWAYS_ON and ld.b_basis == SKILL_GATED
+    # the codex doc references team-rules.md which loads only in claude-code
+    assert any(
+        r.src_harness == "codex"
+        and r.src_doc == "shared-style.md"
+        and r.ref == "team-rules.md"
+        and r.present_in == "claude-code"
+        for r in d.broken_cross_refs
+    )
+    assert d.coherent is False
+
+
+def test_diff_coherent_when_identical(tmp_path: Path):
+    from ssoty.diff import diff_pair
+
+    # two harnesses, one identically-named always-on rule, no cross-refs
+    (tmp_path / ".claude" / "rules").mkdir(parents=True)
+    (tmp_path / ".claude" / "rules" / "copilot-instructions.md").write_text("body", encoding="utf-8")
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github" / "copilot-instructions.md").write_text("body", encoding="utf-8")
+    surfaces = resolve_all(tmp_path)
+    d = diff_pair(surfaces["claude-code"], surfaces["copilot"])
+    assert d.coherent is True
+    assert d.only_in_a == () and d.only_in_b == () and d.different_load == () and d.broken_cross_refs == ()
+
+
+def test_cli_diff_text_surfaces_each_category(tmp_path: Path, capsys):
+    assert main(["diff", str(_diverging_root(tmp_path)), "--a", "claude-code", "--b", "codex"]) == 0
+    out = capsys.readouterr().out
+    assert "claude-code  vs  codex" in out
+    assert "only in claude-code" in out and "team-rules.md" in out
+    assert "only in codex" in out and "codex-only.md" in out
+    assert "same rule, different load" in out
+    assert "shared-style.md  claude-code=always-on  |  codex=skill-gated" in out
+    assert "broken cross-references across the boundary" in out
+    assert "codex:shared-style.md -> 'team-rules.md'" in out
+    assert "do NOT operate under the same rules" in out
+
+
+def test_cli_diff_json_surfaces_each_category(tmp_path: Path, capsys):
+    assert main(["diff", str(_diverging_root(tmp_path)), "--a", "claude-code", "--b", "codex", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert isinstance(payload, list) and len(payload) == 1
+    p = payload[0]
+    assert p["a"] == "claude-code" and p["b"] == "codex"
+    assert "team-rules.md" in p["only_in_a"]
+    assert "codex-only.md" in p["only_in_b"]
+    assert "shared-style.md" in p["shared"]
+    assert {"name": "shared-style.md", "a_basis": "always-on", "b_basis": "skill-gated"} in p["different_load"]
+    assert {
+        "src_harness": "codex",
+        "src_doc": "shared-style.md",
+        "ref": "team-rules.md",
+        "present_in": "claude-code",
+    } in p["broken_cross_refs"]
+    assert p["coherent"] is False
+    assert "do NOT operate under the same rules" in p["verdict"]
+
+
+def test_cli_diff_all_pairs_when_unspecified(tmp_path: Path, capsys):
+    # three present harnesses -> C(3,2) = 3 pairs, each unordered pair once, sorted
+    (tmp_path / ".claude" / "rules").mkdir(parents=True)
+    (tmp_path / ".claude" / "rules" / "a.md").write_text("x", encoding="utf-8")
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github" / "copilot-instructions.md").write_text("y", encoding="utf-8")
+    (tmp_path / "GEMINI.md").write_text("z", encoding="utf-8")
+    assert main(["diff", str(tmp_path), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    pairs = [(p["a"], p["b"]) for p in payload]
+    assert pairs == [("claude-code", "copilot"), ("claude-code", "gemini"), ("copilot", "gemini")]
+
+
+def test_cli_diff_unknown_harness_is_usage_error(tmp_path: Path, capsys):
+    _diverging_root(tmp_path)
+    assert main(["diff", str(tmp_path), "--a", "claude-code", "--b", "nope"]) == 2
+    err = capsys.readouterr().err
+    assert "harness not present: nope" in err
+
+
+def test_cli_diff_half_specified_pair_is_usage_error(tmp_path: Path, capsys):
+    _diverging_root(tmp_path)
+    assert main(["diff", str(tmp_path), "--a", "claude-code"]) == 2
+    assert "--a and --b must be given together" in capsys.readouterr().err
+
+
+def test_cli_diff_writes_nothing(tmp_path: Path, capsys):
+    root = _diverging_root(tmp_path)
+    before = sorted(p.relative_to(root).as_posix() for p in root.rglob("*"))
+    assert main(["diff", str(root)]) == 0
+    assert main(["diff", str(root), "--a", "claude-code", "--b", "codex", "--json"]) == 0
+    capsys.readouterr()
+    after = sorted(p.relative_to(root).as_posix() for p in root.rglob("*"))
+    assert before == after
+    assert not (root / ".ssoty-backup").exists()
+
+
 # --- fix: dry-run-first, backup-first, idempotent remediation ---
 
 

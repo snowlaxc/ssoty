@@ -6,27 +6,49 @@
 [![CI](https://github.com/snowlaxc/ssoty/actions/workflows/ci.yml/badge.svg)](https://github.com/snowlaxc/ssoty/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**AI 코딩 에이전트용 정적 cross-harness 룰 정합성 감사기.**
-*symlink는 파일을 공유할 뿐, 룰이 같은 방식으로 적용됨을 보장하지 않는다.*
+**AI 코딩 에이전트용 정적 cross-harness 룰 발산(divergence) 감사기.**
+*두 모델, 하나의 "공유" 룰셋 — 그런데 정말 같은 룰로 동작할까? 대개 아니다.*
 
-`ssoty`는 여러 에이전트 하네스(Claude Code, Codex, …)의 룰 표면을 읽어 — **결정적,
-LLM·네트워크 0** — 공유한 룰이 하네스 경계를 넘으며 조용히 적용 실패하는 지점을 찾고,
-턴당 토큰 비용("Context Tax")을 정량화합니다.
+`ssoty`는 여러 에이전트 하네스(Claude Code, Codex, Cursor, Copilot, Gemini, Cline)의
+effective 룰 표면을 읽어 — **결정적, LLM·네트워크 0** — 두 모델이 어디서 갈라지는지
+보여줍니다: 한 모델만 적용하고 다른 모델은 못 보는 룰, 공유하지만 *다른 보장*(always-on
+vs skill-gated)으로 로드되는 룰, 경계를 넘으며 깨지는 cross-reference. 턴당 토큰
+비용("Context Tax")은 **부가 측정**으로 함께 제공합니다.
 
 ---
 
 ## 문제
 
-한 `AGENTS.md`/`CLAUDE.md`/룰셋을 모든 도구에 symlink해 "single source of truth"를
-만들지만, symlink는 **배포(distribution)** 수단이지 **정합성(coherence)** 수단이
-아닙니다. 같은 canonical 파일이라도:
+Claude Code, Codex, Cursor에 하나의 "공유" 룰셋을 물려놓고 동일한 동작을 기대하지만,
+실제론 동일하게 동작하지 않습니다 — 각 하네스가 **서로 다른 effective 룰셋**을
+해석하기 때문입니다. 같은 canonical 파일이라도:
 
 - 한 하네스에선 **always-on**(매 턴 주입), 다른 하네스에선 **skill-gated**(스킬
   트리거 시에만) — 같은 파일, 다른 보장;
 - 한 하네스에만 배포된 형제 룰을 참조 → **경계를 넘는 깨진 포인터**;
 - 파일 간 중복 → 매 턴 토큰 임대료.
 
-하네스 B의 에이전트가 "공유한" 룰을 조용히 무시하기 전까진 보이지 않습니다.
+결과적으로 같은 프롬프트, 같은 레포인데 **모델마다 effective 룰이 다르고** — 그래서
+일관성 없이 동작하며, 한 모델이 "공유한" 룰을 조용히 무시하기 전까진 보이지 않습니다.
+
+## 룰 발산 (헤드라인)
+
+```
+$ uvx ssoty diff examples/messy-setup --a claude-code --b codex
+
+  claude-code  vs  codex
+      only in claude-code (1): team-rules.md
+      same rule, different load (1):
+          shared-style.md  claude-code=always-on  |  codex=skill-gated
+      broken cross-references across the boundary (1):
+          codex:shared-style.md -> 'team-rules.md'  (loads only in claude-code, NOT in codex)
+      VERDICT: claude-code and codex do NOT operate under the same rules
+               (1 rule only in claude-code, 1 loads differently, 1 broken cross-ref)
+```
+
+`ssoty diff`는 핵심 질문에 답합니다: *이 두 모델은 같은 룰로 동작하는가?* 현재 존재하는
+모든 쌍에 대해(--a/--b 생략) 또는 지정한 두 하네스를 비교합니다. `--json`/`--redact`
+지원, 명령은 엄격히 read-only입니다.
 
 ## 사용 예
 
@@ -50,7 +72,10 @@ ssoty audit — 2 Critical, 3 Warning, 6 FYI
 실제 broken 참조(Critical)와 `.ssotyignore`로 선언한 **의도적** non-sharing(FYI)을
 구분합니다 — 소음이 아니라 정밀도.
 
-## Context Tax (재현 가능한 before/after)
+## 부가 측정: Context Tax (토큰 임대료)
+
+부가 측정 — 각 표면의 턴당 토큰 비용과 매 턴 지불하는 중복 콘텐츠. 정리 전/후 비교에
+유용하지만, *핵심 pitch는 위의 발산(divergence)*이지 토큰 임대료가 아닙니다.
 
 ```
 claude-code · always-on : 206 → 149 tokens (-27.7%)   # 중복 제거 + broken 문서 제거
@@ -78,9 +103,11 @@ codex       · skill-gated: 106 →   0 tokens
 
 ```bash
 # 무설치 실행
+uvx ssoty diff                  # cross-model 룰 발산 (헤드라인; 존재하는 모든 쌍)
 uvx ssoty audit                 # $HOME(~/.claude, ~/.codex) 감사
 # 또는 설치
 pipx install ssoty
+ssoty diff --a claude-code --b codex  # 지정한 두 하네스 비교 (read-only)
 ssoty audit --redact            # 출력의 홈경로·이메일 마스킹
 ssoty audit --ci                # Critical 있으면 비정상 종료 (CI용)
 ssoty audit --format sarif      # SARIF 2.1.0 (github/codeql-action/upload-sarif용)

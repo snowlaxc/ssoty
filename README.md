@@ -6,21 +6,23 @@
 [![CI](https://github.com/snowlaxc/ssoty/actions/workflows/ci.yml/badge.svg)](https://github.com/snowlaxc/ssoty/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Static cross-harness rule coherence auditor for AI coding agents.**
-*A symlink shares files. It does not guarantee the rule is applied the same way.*
+**Static cross-harness rule DIVERGENCE auditor for AI coding agents.**
+*Two models, one "shared" rule set — but do they actually operate under the same rules? Usually not.*
 
-`ssoty` reads the rule surfaces of multiple agent harnesses (Claude Code, Codex, …)
-and finds — **deterministically, with no LLM and no network** — where shared rules
-silently fail to apply across a harness boundary, then quantifies the per-turn token
-cost ("Context Tax").
+`ssoty` reads the effective rule surfaces of multiple agent harnesses (Claude Code,
+Codex, Cursor, Copilot, Gemini, Cline) and shows — **deterministically, with no LLM
+and no network** — where two models diverge: which rules one model applies that the
+other never sees, which shared rules load under a *different guarantee* (always-on vs
+skill-gated), and which cross-references break across the boundary. It also quantifies
+the per-turn token cost ("Context Tax") as a secondary metric.
 
 ---
 
 ## The problem
 
-Teams symlink one `AGENTS.md` / `CLAUDE.md` / rule set into every tool to get a
-"single source of truth." But a symlink is a **distribution** mechanism, not a
-**coherence** mechanism. The same canonical file can:
+You point Claude Code, Codex, and Cursor at one "shared" rule set and expect identical
+behavior. They don't behave identically — because each harness resolves a **different
+effective rule set**. The same canonical file can:
 
 - load **always-on** in one harness (injected every turn) but **skill-gated** in
   another (loaded only when a skill triggers) — same file, unequal guarantee;
@@ -28,7 +30,28 @@ Teams symlink one `AGENTS.md` / `CLAUDE.md` / rule set into every tool to get a
   to the other — a broken pointer across the boundary;
 - be duplicated across files, paying token rent every turn.
 
-These are invisible until an agent in harness B quietly ignores a rule you "share."
+The result: the same prompt, the same repo, but **different effective rules per
+model** — so they behave inconsistently, and it's invisible until one model quietly
+ignores a rule you "share."
+
+## Rule divergence (the headline)
+
+```
+$ uvx ssoty diff examples/messy-setup --a claude-code --b codex
+
+  claude-code  vs  codex
+      only in claude-code (1): team-rules.md
+      same rule, different load (1):
+          shared-style.md  claude-code=always-on  |  codex=skill-gated
+      broken cross-references across the boundary (1):
+          codex:shared-style.md -> 'team-rules.md'  (loads only in claude-code, NOT in codex)
+      VERDICT: claude-code and codex do NOT operate under the same rules
+               (1 rule only in claude-code, 1 loads differently, 1 broken cross-ref)
+```
+
+`ssoty diff` answers the one question that matters: *do these two models operate under
+the same rules?* Run it across every present pair (omit `--a/--b`), or compare two
+named harnesses. `--json` and `--redact` supported; the command is strictly read-only.
 
 ## What ssoty does
 
@@ -58,7 +81,11 @@ It distinguishes a **genuine** broken cross-reference (Critical) from
 **intentional** non-sharing you declared in `.ssotyignore` (FYI) — precision over
 noise.
 
-## Context Tax (reproducible before/after)
+## Also measures: Context Tax (token rent)
+
+Secondary metric — the per-turn token cost of each surface and duplicate content paid
+every turn. Useful for before/after cleanup, but the *pitch is divergence above*, not
+token rent.
 
 ```
 $ uvx ssoty metrics examples/messy-setup     $ uvx ssoty metrics examples/clean-setup
@@ -91,9 +118,11 @@ Reproduce: `uvx ssoty metrics examples/messy-setup` (see [`benchmarks/REPORT.md`
 
 ```bash
 # zero-install run
+uvx ssoty diff                  # cross-model rule divergence (the headline; all present pairs)
 uvx ssoty audit                 # audits $HOME (~/.claude, ~/.codex)
 # or install
 pipx install ssoty
+ssoty diff --a claude-code --b codex  # compare two named harnesses (read-only)
 ssoty audit --redact            # mask home paths + emails in output
 ssoty audit --ci                # exit non-zero on any Critical (for CI)
 ssoty audit --format sarif      # SARIF 2.1.0 (for github/codeql-action/upload-sarif)
