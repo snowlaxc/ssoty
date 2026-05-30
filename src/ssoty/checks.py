@@ -7,16 +7,41 @@ reference (Critical) from intentional, declared non-sharing (FYI).
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
 from ssoty.ignore import SsotyIgnore
-from ssoty.models import Finding, HarnessSurface, Severity
+from ssoty.models import ALWAYS_ON, Finding, HarnessSurface, Severity
 from ssoty.resolver import referenced_docs
 from ssoty.tokens import count_tokens
 
 _DUP_MIN_CHARS = 200  # ignore trivial shared snippets
+
+# weak_directive: a fenced-code stripper (reuse the resolver's pattern locally) and
+# the two token vocabularies. A line is flagged ONLY when a weak modal co-occurs with
+# a hard-requirement signal on the SAME line — plain standalone `should` is never
+# flagged (it is the primary false-positive source).
+_WEAK_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+# Weak modals: phrase forms first so the message names the full hedge.
+_WEAK_MODALS = ("nice to have", "where possible", "if possible", "should", "try to")
+_HARD_SIGNALS = (
+    "never",
+    "must",
+    "required",
+    "security",
+    "secret",
+    "credential",
+    "production",
+    "prod",
+    "irreversible",
+    "destructive",
+    "force push",
+    "drop table",
+)
+# Illustrative/example markers — lines that are clearly not live directives.
+_WEAK_SKIP_MARKERS = ("변명", "rationalization", "anti-pattern", "예시", "example")
 
 
 @dataclass
@@ -202,6 +227,67 @@ def check_skill_integrity(ctx: CheckContext) -> list[Finding]:
     return out
 
 
+def _match_token(tokens: tuple[str, ...], lowered: str) -> str | None:
+    """Return the first token present as a WHOLE WORD in ``lowered``, else None.
+
+    Word-boundary matching (not substring) so 'prod' does not match 'production'
+    or 'reproduce', 'must' does not match 'mustard', 'secret' not 'secretary'.
+    """
+    for token in tokens:
+        if re.search(rf"\b{re.escape(token)}\b", lowered):
+            return token
+    return None
+
+
+def _is_illustrative_line(stripped: str, lowered: str) -> bool:
+    """A line that is a table row, blockquote, or example/anti-pattern marker."""
+    if stripped.startswith("|") or stripped.startswith(">"):
+        return True
+    return any(marker in lowered for marker in _WEAK_SKIP_MARKERS)
+
+
+def check_weak_directive(ctx: CheckContext) -> list[Finding]:
+    """Flag (FYI) a weak modal hedging a hard requirement on the same line.
+
+    Scans ONLY always-on docs — the actually enforced surface. Skips fenced code,
+    table rows, blockquotes, and example/anti-rationalization lines. A line is flagged
+    only when a weak modal (e.g. ``should``) co-occurs with a hard-requirement signal
+    (e.g. ``never``, ``security``) on that line; standalone ``should`` is never flagged.
+    Never blocking — conservative co-occurrence gating keeps false positives low.
+    """
+    out: list[Finding] = []
+    for surface in ctx.surfaces.values():
+        for doc in surface.docs:
+            if doc.load_basis != ALWAYS_ON:
+                continue
+            body = _WEAK_FENCE_RE.sub("", doc.text)
+            for line in body.splitlines():
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                lowered = stripped.lower()
+                if _is_illustrative_line(stripped, lowered):
+                    continue
+                modal = _match_token(_WEAK_MODALS, lowered)
+                if modal is None:
+                    continue
+                signal = _match_token(_HARD_SIGNALS, lowered)
+                if signal is None:
+                    continue
+                out.append(
+                    Finding(
+                        Severity.FYI,
+                        "weak_directive",
+                        surface.harness,
+                        str(doc.path),
+                        f"weak modal '{modal}' hedges a hard-requirement signal '{signal}' "
+                        f"on the same line — an enforced rule should state the requirement firmly",
+                        signal,
+                    )
+                )
+    return out
+
+
 ALL_CHECKS = (
     check_broken_symlink,
     check_dangling_cross_ref,
@@ -209,6 +295,7 @@ ALL_CHECKS = (
     check_non_shared_surface,
     check_duplicate_content,
     check_skill_integrity,
+    check_weak_directive,
 )
 
 

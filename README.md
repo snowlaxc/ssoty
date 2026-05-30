@@ -113,6 +113,7 @@ Reproduce: `uvx ssoty metrics examples/messy-setup` (see [`benchmarks/REPORT.md`
 | `duplicate_content` | Warning | identical blocks duplicated across files (token rent) |
 | `non_shared_surface` | FYI | a rule present in one harness only |
 | `skill_integrity` | Warning | skill dir without a `SKILL.md` |
+| `weak_directive` | FYI | a weak modal (`should`, `try to`, …) hedges a hard-requirement signal (`never`, `security`, …) on the same line in an always-on rule |
 
 ## Install
 
@@ -171,8 +172,10 @@ a cross-harness tool shouldn't live inside one harness.
 Claude Code (`~/.claude/rules`, `CLAUDE.md`), Codex (`AGENTS.md`,
 `global-agent-rules`), Cursor (`.cursor/rules/*.mdc` with `alwaysApply` frontmatter,
 legacy `.cursorrules`), GitHub Copilot (`.github/copilot-instructions.md`),
-Gemini CLI (`GEMINI.md`, `~/.gemini/GEMINI.md`), and Cline (`.clinerules/` directory,
-legacy `.clinerules`, `AGENTS.md`). Empty harnesses are skipped. Point ssoty at `$HOME` or a project root.
+Gemini CLI (`GEMINI.md`, `~/.gemini/GEMINI.md`), Cline (`.clinerules/` directory,
+legacy `.clinerules`, `AGENTS.md`), Windsurf (`.windsurf/rules/*.md`, legacy
+`.windsurfrules`), and Continue (`.continue/rules/*.md`). Empty harnesses are skipped.
+Point ssoty at `$HOME` or a project root.
 
 ## Privacy
 ssoty audits *your* config; its output can quote your rules verbatim. It runs

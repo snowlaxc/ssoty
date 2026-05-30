@@ -98,6 +98,7 @@ codex       · skill-gated: 106 →   0 tokens
 | `duplicate_content` | Warning | 파일 간 동일 블록 중복 (토큰 임대료) |
 | `non_shared_surface` | FYI | 한 하네스에만 존재하는 룰 |
 | `skill_integrity` | Warning | `SKILL.md` 없는 스킬 디렉토리 |
+| `weak_directive` | FYI | always-on 룰의 한 줄에서 약한 표현(`should`, `try to`, …)이 강한 요구 신호(`never`, `security`, …)를 흐리는 경우 |
 
 ## 설치
 
@@ -155,7 +156,9 @@ Claude Code (`~/.claude/rules`, `CLAUDE.md`), Codex (`AGENTS.md`,
 `global-agent-rules`), Cursor (`.cursor/rules/*.mdc`의 `alwaysApply` frontmatter로
 load 판별, legacy `.cursorrules`), GitHub Copilot (`.github/copilot-instructions.md`),
 Gemini CLI (`GEMINI.md`, `~/.gemini/GEMINI.md`), Cline (`.clinerules/` 디렉토리,
-legacy `.clinerules`, `AGENTS.md`). 비어있는 하네스는 스킵. `$HOME` 또는 프로젝트 루트를 가리키면 됩니다.
+legacy `.clinerules`, `AGENTS.md`), Windsurf (`.windsurf/rules/*.md`, legacy
+`.windsurfrules`), Continue (`.continue/rules/*.md`). 비어있는 하네스는 스킵.
+`$HOME` 또는 프로젝트 루트를 가리키면 됩니다.
 
 ## 개인정보
 ssoty는 *당신의* config를 감사하며 출력이 룰을 그대로 인용할 수 있습니다. **전적으로

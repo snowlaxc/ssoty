@@ -688,3 +688,103 @@ def test_fix_redact_masks_home_in_output(tmp_path: Path, capsys):
         r.os.path.expanduser = orig
     assert home not in out
     assert "$HOME" in out
+
+
+# --- harnesses: windsurf + continue ---
+
+
+def test_windsurf_dir_and_legacy_resolved(tmp_path: Path):
+    rules = tmp_path / ".windsurf" / "rules"
+    rules.mkdir(parents=True)
+    (rules / "style.md").write_text("synthetic windsurf rule for /home/dev", encoding="utf-8")
+    (tmp_path / ".windsurfrules").write_text("synthetic legacy windsurf rule", encoding="utf-8")
+    ws = resolve_all(tmp_path)["windsurf"]
+    # directory rules are conditional (Cascade activation modes)
+    assert ws.by_name("style.md").load_basis == CONDITIONAL
+    # legacy single file is always-on
+    assert ws.by_name(".windsurfrules").load_basis == ALWAYS_ON
+
+
+def test_continue_dir_resolved(tmp_path: Path):
+    rules = tmp_path / ".continue" / "rules"
+    rules.mkdir(parents=True)
+    (rules / "rules.md").write_text("synthetic continue rule for /home/dev", encoding="utf-8")
+    cont = resolve_all(tmp_path)["continue"]
+    assert cont.by_name("rules.md").load_basis == CONDITIONAL
+
+
+# --- checks: weak_directive (FYI, never blocking) ---
+
+
+def _weak(findings):
+    return [f for f in findings if f.check == "weak_directive"]
+
+
+def test_weak_directive_flags_modal_with_hard_signal():
+    doc = RuleDoc(
+        harness="claude-code",
+        name="a.md",
+        path=Path("a.md"),
+        load_basis=ALWAYS_ON,
+        text="You should never log a secret in production.",
+    )
+    ctx = CheckContext(surfaces={"claude-code": HarnessSurface("claude-code", [doc])}, ignore=SsotyIgnore())
+    found = _weak(run_checks(ctx))
+    assert found and all(f.severity is Severity.FYI for f in found)
+    assert not any(f.severity is Severity.CRITICAL for f in found)
+
+
+def test_weak_directive_no_false_positive_on_normal_prose():
+    # standalone `should`, a hard signal alone, code fence, table row, blockquote,
+    # and an anti-rationalization example must NOT be flagged.
+    text = (
+        "You should write tests for new behavior.\n"
+        "Secrets must be stored in a secret manager.\n"
+        "Run `should never` examples in code:\n"
+        "```\nshould never log a secret\n```\n"
+        "| should | never | example row |\n"
+        "> should never — quoted example\n"
+        '| "try to" hedge a security rule | Rationalization | counter |\n'
+    )
+    doc = RuleDoc(
+        harness="claude-code",
+        name="b.md",
+        path=Path("b.md"),
+        load_basis=ALWAYS_ON,
+        text=text,
+    )
+    ctx = CheckContext(surfaces={"claude-code": HarnessSurface("claude-code", [doc])}, ignore=SsotyIgnore())
+    assert _weak(run_checks(ctx)) == []
+
+
+def test_weak_directive_only_scans_always_on():
+    # the same hedged line in a conditional/skill-gated doc is NOT flagged
+    doc = RuleDoc(
+        harness="cursor",
+        name="c.mdc",
+        path=Path("c.mdc"),
+        load_basis=CONDITIONAL,
+        text="You should never force push to a shared branch.",
+    )
+    ctx = CheckContext(surfaces={"cursor": HarnessSurface("cursor", [doc])}, ignore=SsotyIgnore())
+    assert _weak(run_checks(ctx)) == []
+
+
+def test_weak_directive_word_boundary_no_substring_false_positive():
+    # hard-signal SUBSTRINGS inside ordinary words must NOT match:
+    # 'prod' in product/reproduce/productivity, 'must' in mustard, 'secret' in secretary
+    text = (
+        "You should reproduce the product to improve productivity.\n"
+        "Try to produce better output where possible.\n"
+        "The secretary should file reports.\n"
+        "You should add mustard if possible.\n"
+    )
+    doc = RuleDoc(
+        harness="claude-code",
+        name="d.md",
+        path=Path("d.md"),
+        load_basis=ALWAYS_ON,
+        text=text,
+    )
+    ctx = CheckContext(surfaces={"claude-code": HarnessSurface("claude-code", [doc])}, ignore=SsotyIgnore())
+    assert _weak(run_checks(ctx)) == []

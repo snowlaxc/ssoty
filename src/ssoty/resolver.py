@@ -80,6 +80,23 @@ CLINE_SPEC = HarnessSpec(
         Source("AGENTS.md", ALWAYS_ON),
     ),
 )
+# Windsurf (Cascade): a `.windsurf/rules/` directory whose files are loaded
+# conditionally (activation modes: glob/model-decision/manual), plus the legacy
+# single-file `.windsurfrules`, which is always applied.
+WINDSURF_SPEC = HarnessSpec(
+    harness="windsurf",
+    sources=(
+        Source(".windsurf/rules", CONDITIONAL, "*.md"),
+        Source(".windsurfrules", ALWAYS_ON),  # legacy single file, always applied
+    ),
+)
+# Continue: project rules live under `.continue/rules/`; each block declares its
+# own apply semantics (globs / always / agent-requested), so the directory is
+# treated as conditional at the surface level.
+CONTINUE_SPEC = HarnessSpec(
+    harness="continue",
+    sources=(Source(".continue/rules", CONDITIONAL, "*.md"),),
+)
 DEFAULT_SPECS: tuple[HarnessSpec, ...] = (
     CLAUDE_CODE_SPEC,
     CODEX_SPEC,
@@ -87,6 +104,8 @@ DEFAULT_SPECS: tuple[HarnessSpec, ...] = (
     COPILOT_SPEC,
     GEMINI_SPEC,
     CLINE_SPEC,
+    WINDSURF_SPEC,
+    CONTINUE_SPEC,
 )
 
 

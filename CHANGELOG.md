@@ -8,6 +8,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](ht
 - Release workflow triggers only on full semver tags (`v*.*.*`) so moving the
   floating `v0` tag no longer starts a duplicate publish; publish is `skip-existing`.
 
+## [0.1.7] — 2026-05-30
+### Added
+- **Windsurf** and **Continue** harness support. Eight harnesses now. Windsurf:
+  `.windsurf/rules/*.md` (conditional — Cascade activation modes) plus the legacy
+  always-on `.windsurfrules`. Continue: `.continue/rules/*.md` (conditional — each
+  rule block declares its own apply semantics).
+- **`weak_directive`** check (FYI, never blocking). Scans only always-on docs — the
+  actually enforced surface — and flags the narrow co-occurrence where a weak modal
+  (`should`, `try to`, `nice to have`, `where possible`, `if possible`) hedges a
+  hard-requirement signal (`never`, `must`, `required`, `security`, `secret`,
+  `credential`, `production`/`prod`, `irreversible`, `destructive`, `force push`,
+  `drop table`) on the same line. Fenced code, table rows, blockquotes, and
+  example/anti-rationalization lines are skipped, and standalone `should` is never
+  flagged, keeping false positives low. Deterministic, no LLM, no network.
+
 ## [0.1.6] — 2026-05-30
 ### Added
 - **`ssoty diff`** — cross-model rule **divergence** between two harnesses, the new
