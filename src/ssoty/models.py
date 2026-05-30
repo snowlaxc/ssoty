@@ -11,6 +11,23 @@ ALWAYS_ON = "always-on"  # injected every turn (actual surface)
 SKILL_GATED = "skill-gated"  # loaded only when a skill triggers (potential surface)
 CONDITIONAL = "conditional"  # loaded by rule frontmatter/globs (e.g. Cursor .mdc not alwaysApply)
 
+# Per-harness entrypoint filenames. Every harness owns its OWN copy by design, so
+# such a file can never be "shared" and a pointer to it names the canonical entrypoint
+# concept, not a broken file. Defined here (not in checks/resolver) so both the resolver
+# and the checks module can import it without a circular dependency (resolver is imported
+# BY checks, never the reverse).
+ENTRYPOINTS = frozenset(
+    {
+        "CLAUDE.md",
+        "AGENTS.md",
+        "GEMINI.md",
+        "copilot-instructions.md",
+        ".windsurfrules",
+        ".cursorrules",
+        ".clinerules",
+    }
+)
+
 
 class Severity(str, Enum):
     """Review severity labels (see team review conventions)."""

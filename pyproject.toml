@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ssoty"
-version = "0.1.8"
+version = "0.1.9"
 description = "Static cross-harness rule coherence auditor for AI coding agents (Claude Code, Codex, ...)"
 readme = "README.md"
 requires-python = ">=3.10"

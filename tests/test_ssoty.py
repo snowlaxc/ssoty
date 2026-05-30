@@ -137,18 +137,22 @@ def _by_check(findings, name):
     return [f for f in findings if f.check == name]
 
 
-def test_messy_has_two_criticals():
+def test_messy_has_one_structural_critical():
+    # dangling_cross_ref no longer emits Critical (0.1.9); the only structural Critical
+    # is broken_symlink. The team-rules.md cross-ref is now Warning (real divergence).
     findings = _audit(MESSY)
     crit = [f for f in findings if f.severity is Severity.CRITICAL]
-    assert len(crit) == 2
-    assert {f.check for f in crit} == {"broken_symlink", "dangling_cross_ref"}
+    assert len(crit) == 1
+    assert {f.check for f in crit} == {"broken_symlink"}
 
 
 def test_messy_dangling_distinguishes_intent():
     dangling = _by_check(_audit(MESSY), "dangling_cross_ref")
-    crit = [f for f in dangling if f.severity is Severity.CRITICAL]
+    warn = [f for f in dangling if f.severity is Severity.WARNING]
     fyi = [f for f in dangling if f.severity is Severity.FYI]
-    assert any("team-rules.md" in f.message for f in crit)
+    # a genuine cross-harness divergence is now Warning (was Critical), not suppressed
+    assert any("team-rules.md" in f.message for f in warn)
+    assert not any(f.severity is Severity.CRITICAL for f in dangling)
     assert any("meta-layout.md" in f.message for f in fyi)  # intent-suppressed
 
 
@@ -208,7 +212,7 @@ def test_cli_metrics_json_parses(capsys):
 def test_cli_audit_json_has_findings(capsys):
     main(["audit", str(MESSY), "--json"])
     payload = json.loads(capsys.readouterr().out)
-    assert payload["summary"]["Critical"] == 2
+    assert payload["summary"]["Critical"] == 1  # only broken_symlink is structural Critical
     assert len(payload["findings"]) > 0
 
 
@@ -234,7 +238,7 @@ def test_cli_audit_json_alias_keeps_legacy_shape(capsys):
     main(["audit", str(MESSY), "--json"])
     payload = json.loads(capsys.readouterr().out)
     assert "summary" in payload and "findings" in payload and "context_tax" in payload
-    assert payload["summary"]["Critical"] == 2
+    assert payload["summary"]["Critical"] == 1
 
 
 def test_build_returns_result_and_tax():
@@ -620,10 +624,13 @@ def test_fix_never_touches_valid_symlink_or_real_file(tmp_path: Path, capsys):
 
 
 def test_fix_scaffold_ignore_appends_non_shared(tmp_path: Path, capsys):
-    # two harnesses present; a rule only in claude-code is a non_shared_surface FYI
+    # two harnesses present; non-entrypoint rules only in one harness are non_shared_surface
+    # FYIs and scaffold-able. The copilot entrypoint (copilot-instructions.md) is NOT a
+    # non_shared_surface finding (per-harness entrypoint by design) so it is NOT scaffolded.
     claude_rules = tmp_path / ".claude" / "rules"
     claude_rules.mkdir(parents=True)
     (claude_rules / "solo.md").write_text("synthetic claude-only rule", encoding="utf-8")
+    (claude_rules / "extra.md").write_text("synthetic claude-only extra rule", encoding="utf-8")
     (tmp_path / ".github").mkdir()
     (tmp_path / ".github" / "copilot-instructions.md").write_text("synthetic copilot rule", encoding="utf-8")
 
@@ -636,20 +643,25 @@ def test_fix_scaffold_ignore_appends_non_shared(tmp_path: Path, capsys):
     assert main(["fix", str(tmp_path), "--scaffold-ignore"]) == 0
     out = capsys.readouterr().out
     assert "WOULD append to .ssotyignore: solo.md" in out
+    # entrypoint is skipped (not a non_shared_surface finding)
+    assert "WOULD append to .ssotyignore: copilot-instructions.md" not in out
     assert not (tmp_path / ".ssotyignore").exists()
 
-    # apply with --scaffold-ignore creates .ssotyignore with the name
+    # apply with --scaffold-ignore creates .ssotyignore with the non-entrypoint names
     assert main(["fix", str(tmp_path), "--apply", "--scaffold-ignore"]) == 0
     capsys.readouterr()
     ig = SsotyIgnore.load(tmp_path)
     assert ig.declares("solo.md")
-    assert ig.declares("copilot-instructions.md")
+    assert ig.declares("extra.md")
+    # the per-harness entrypoint is never scaffolded as non-shared
+    assert not ig.declares("copilot-instructions.md")
 
 
 def test_fix_scaffold_ignore_skips_already_declared(tmp_path: Path, capsys):
     claude_rules = tmp_path / ".claude" / "rules"
     claude_rules.mkdir(parents=True)
     (claude_rules / "solo.md").write_text("synthetic claude-only rule", encoding="utf-8")
+    (claude_rules / "extra.md").write_text("synthetic claude-only extra rule", encoding="utf-8")
     (tmp_path / ".github").mkdir()
     (tmp_path / ".github" / "copilot-instructions.md").write_text("synthetic copilot rule", encoding="utf-8")
     # pre-declare solo.md
@@ -657,9 +669,9 @@ def test_fix_scaffold_ignore_skips_already_declared(tmp_path: Path, capsys):
 
     assert main(["fix", str(tmp_path), "--scaffold-ignore"]) == 0
     out = capsys.readouterr().out
-    # solo.md is already declared -> not offered again; copilot one still offered
+    # solo.md is already declared -> not offered again; the other non-shared rule still offered
     assert "WOULD append to .ssotyignore: solo.md" not in out
-    assert "WOULD append to .ssotyignore: copilot-instructions.md" in out
+    assert "WOULD append to .ssotyignore: extra.md" in out
 
 
 def test_fix_apply_empty_plan_creates_no_backup(tmp_path: Path, capsys):
@@ -789,3 +801,228 @@ def test_weak_directive_word_boundary_no_substring_false_positive():
     )
     ctx = CheckContext(surfaces={"claude-code": HarnessSurface("claude-code", [doc])}, ignore=SsotyIgnore())
     assert _weak(run_checks(ctx)) == []
+
+
+# --- 0.1.9: precision fixes for cross-harness dangling false positives ---
+
+
+def test_referenced_docs_drops_frontmatter_provenance():
+    # a `source:` provenance path in YAML frontmatter is metadata, not a pointer
+    text = (
+        "---\n"
+        "source: ~/.codex/AGENTS.md\n"
+        "absorbed_at: 2026-01-01\n"
+        "---\n"
+        "Body text — see `team-defaults.md` for the real pointer.\n"
+    )
+    refs = referenced_docs(text)
+    assert "AGENTS.md" not in refs  # provenance, dropped
+    assert refs == {"team-defaults.md"}  # genuine prose pointer still extracts
+
+
+def test_referenced_docs_keeps_horizontal_rule_section_body():
+    # a leading `---` that is a horizontal rule (NOT YAML frontmatter, no key: line)
+    # must NOT be stripped — a real pointer in that section still extracts
+    text = "---\nIntro section, see `root-cause-first.md` first.\n---\nmore"
+    assert "root-cause-first.md" in referenced_docs(text)
+
+
+def test_referenced_docs_drops_allowlist_entrypoint_mentions():
+    # an entrypoint filename embedded in a glob/path allowlist list is a permission
+    # mention, not a pointer; a lone .md backtick in prose is still a pointer
+    text = (
+        "Direct writes OK for: `~/.claude/**`, `.omc/**`, `CLAUDE.md`, `AGENTS.md`.\n"
+        "But always consult (`root-cause-first.md` first) before editing.\n"
+    )
+    refs = referenced_docs(text)
+    assert "CLAUDE.md" not in refs and "AGENTS.md" not in refs  # allowlist mentions
+    assert refs == {"root-cause-first.md"}  # lone prose pointer survives
+
+
+def test_referenced_docs_lone_entrypoint_pointer_survives():
+    # a lone entrypoint backtick in prose (no glob/path sibling on the line) is a pointer
+    assert referenced_docs("See `CLAUDE.md` for the project contract.") == {"CLAUDE.md"}
+
+
+def test_referenced_docs_md_link_in_allowlist_line_untouched():
+    # markdown-link refs are always genuine pointers, even on an allowlist-style line
+    text = "Allowlist `~/.claude/**`, `.omc/**` but [layout](meta-layout.md) is canonical."
+    assert "meta-layout.md" in referenced_docs(text)
+
+
+def test_dangling_allowlist_mention_produces_no_finding():
+    # regression: an allowlist line must not produce a dangling_cross_ref at all
+    claude = RuleDoc(
+        harness="claude-code",
+        name="a.md",
+        path=Path("a/a.md"),
+        load_basis=ALWAYS_ON,
+        text="Direct writes OK for: `~/.claude/**`, `CLAUDE.md`, `AGENTS.md`.",
+    )
+    codex = RuleDoc(
+        harness="codex",
+        name="AGENTS.md",
+        path=Path("b/AGENTS.md"),
+        load_basis=ALWAYS_ON,
+        text="codex contract",
+    )
+    ctx = CheckContext(
+        surfaces={
+            "claude-code": HarnessSurface("claude-code", [claude]),
+            "codex": HarnessSurface("codex", [codex]),
+        },
+        ignore=SsotyIgnore(),
+    )
+    dangling = [f for f in run_checks(ctx) if f.check == "dangling_cross_ref"]
+    assert dangling == []  # allowlist mention of AGENTS.md was not treated as a ref
+
+
+def test_dangling_frontmatter_source_produces_no_finding():
+    # regression: a frontmatter `source:` path must not produce a dangling_cross_ref
+    claude = RuleDoc(
+        harness="claude-code",
+        name="rule.md",
+        path=Path("a/rule.md"),
+        load_basis=ALWAYS_ON,
+        text="---\nsource: ~/.codex/AGENTS.md\n---\nBody with no pointers.",
+    )
+    codex = RuleDoc(
+        harness="codex",
+        name="AGENTS.md",
+        path=Path("b/AGENTS.md"),
+        load_basis=ALWAYS_ON,
+        text="codex",
+    )
+    ctx = CheckContext(
+        surfaces={
+            "claude-code": HarnessSurface("claude-code", [claude]),
+            "codex": HarnessSurface("codex", [codex]),
+        },
+        ignore=SsotyIgnore(),
+    )
+    assert [f for f in run_checks(ctx) if f.check == "dangling_cross_ref"] == []
+
+
+def test_dangling_entrypoint_target_is_fyi_not_warning():
+    # a ref TO an entrypoint present in another harness is FYI (per-harness by design)
+    claude = RuleDoc(
+        harness="claude-code",
+        name="rule.md",
+        path=Path("a/rule.md"),
+        load_basis=ALWAYS_ON,
+        text="See the `AGENTS.md` contract for codex specifics.",
+    )
+    codex = RuleDoc(
+        harness="codex",
+        name="AGENTS.md",
+        path=Path("b/AGENTS.md"),
+        load_basis=ALWAYS_ON,
+        text="codex",
+    )
+    ctx = CheckContext(
+        surfaces={
+            "claude-code": HarnessSurface("claude-code", [claude]),
+            "codex": HarnessSurface("codex", [codex]),
+        },
+        ignore=SsotyIgnore(),
+    )
+    dangling = [f for f in run_checks(ctx) if f.check == "dangling_cross_ref"]
+    assert dangling and all(f.severity is Severity.FYI for f in dangling)
+    assert all(f.severity is not Severity.CRITICAL for f in dangling)
+
+
+def test_dangling_canonically_shared_symlink_is_fyi_not_critical(tmp_path: Path):
+    # a real symlinked canonical file mounted into 2 harnesses: a ref it makes is FYI
+    canonical_dir = tmp_path / "canonical"
+    canonical_dir.mkdir()
+    shared = canonical_dir / "shared-rule.md"
+    shared.write_text("see `team-defaults.md` for the routing table", encoding="utf-8")
+    # claude-code mounts the canonical file via symlink
+    claude_rules = tmp_path / ".claude" / "rules"
+    claude_rules.mkdir(parents=True)
+    (claude_rules / "shared-rule.md").symlink_to(shared)
+    (claude_rules / "team-defaults.md").write_text("routing table lives in claude", encoding="utf-8")
+    # codex mounts the SAME canonical file via symlink (skill-gated references)
+    refs = tmp_path / ".codex" / "skills" / "global-agent-rules" / "references"
+    refs.mkdir(parents=True)
+    (refs / "shared-rule.md").symlink_to(shared)
+
+    findings = _audit(tmp_path)
+    dangling = [f for f in findings if f.check == "dangling_cross_ref"]
+    # the codex-side shared-rule.md references team-defaults.md (only in claude), but the
+    # referencing doc is canonically shared (same realpath in 2 harnesses) -> FYI, not Critical
+    assert dangling
+    assert all(f.severity is not Severity.CRITICAL for f in dangling)
+    canonical_fyi = [f for f in dangling if "canonically shared" in f.message]
+    assert canonical_fyi and all(f.severity is Severity.FYI for f in canonical_fyi)
+
+
+def test_non_shared_surface_skips_entrypoints(tmp_path: Path):
+    # an entrypoint present only in one harness is NOT a non_shared_surface finding;
+    # a non-entrypoint rule present only in one harness still is.
+    claude_rules = tmp_path / ".claude" / "rules"
+    claude_rules.mkdir(parents=True)
+    (claude_rules / "solo.md").write_text("synthetic claude-only rule", encoding="utf-8")
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github" / "copilot-instructions.md").write_text("copilot rule", encoding="utf-8")
+    findings = _audit(tmp_path)
+    nss = [f for f in findings if f.check == "non_shared_surface"]
+    names = {f.rule_id for f in nss}
+    assert "solo.md" in names  # genuine surface asymmetry still reported
+    assert "copilot-instructions.md" not in names  # entrypoint skipped
+
+
+def test_duplicate_content_cross_harness_rolls_up(tmp_path: Path):
+    # the same big block mounted once-per-harness across 2 harnesses rolls up into a
+    # SINGLE FYI, not one-per-block
+    block = "acme shared rule body. " * 20  # > 200 chars
+    other = "another acme shared block here. " * 20
+    claude_rules = tmp_path / ".claude" / "rules"
+    claude_rules.mkdir(parents=True)
+    (claude_rules / "a.md").write_text(block + "\n\n" + other, encoding="utf-8")
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github" / "copilot-instructions.md").write_text(block + "\n\n" + other, encoding="utf-8")
+    dup = [f for f in _audit(tmp_path) if f.check == "duplicate_content"]
+    cross = [f for f in dup if f.severity is Severity.FYI]
+    assert len(cross) == 1  # 2 cross-harness blocks collapsed to 1 rollup FYI
+    assert "identical blocks" in cross[0].message and "tokens total" in cross[0].message
+
+
+def test_guard_genuine_dangling_and_load_asymmetry_still_fire():
+    # over-suppression guard: a genuine cross-harness dangling (non-entrypoint target,
+    # referencing doc NOT canonically shared, not ignored) still fires as Warning, and a
+    # genuine load_asymmetry still fires as Warning.
+    a = RuleDoc(
+        harness="claude-code",
+        name="shared.md",
+        path=Path("a/shared.md"),
+        load_basis=ALWAYS_ON,
+        text="see `team-rules.md` for details",
+    )
+    team = RuleDoc(
+        harness="claude-code",
+        name="team-rules.md",
+        path=Path("a/team-rules.md"),
+        load_basis=ALWAYS_ON,
+        text="team rules",
+    )
+    b = RuleDoc(
+        harness="codex",
+        name="shared.md",
+        path=Path("b/shared.md"),
+        load_basis=SKILL_GATED,  # different basis from claude -> load_asymmetry
+        text="see `team-rules.md` for details",
+    )
+    ctx = CheckContext(
+        surfaces={
+            "claude-code": HarnessSurface("claude-code", [a, team]),
+            "codex": HarnessSurface("codex", [b]),
+        },
+        ignore=SsotyIgnore(),
+    )
+    findings = run_checks(ctx)
+    dangling = [f for f in findings if f.check == "dangling_cross_ref"]
+    # codex/shared.md -> team-rules.md (only in claude), distinct realpath, not entrypoint
+    assert any(f.severity is Severity.WARNING and "team-rules.md" in f.message for f in dangling)
+    asym = [f for f in findings if f.check == "load_asymmetry"]
+    assert asym and any(f.severity is Severity.WARNING for f in asym)

@@ -27,7 +27,7 @@ effective rule set**. The same canonical file can:
 - load **always-on** in one harness (injected every turn) but **skill-gated** in
   another (loaded only when a skill triggers) — same file, unequal guarantee;
 - reference a sibling rule that exists in one harness but was **never distributed**
-  to the other — a broken pointer across the boundary;
+  to the other — a pointer that resolves on one side but not the other;
 - be duplicated across files, paying token rent every turn.
 
 The result: the same prompt, the same repo, but **different effective rules per
@@ -57,16 +57,16 @@ named harnesses. `--json` and `--redact` supported; the command is strictly read
 
 ```
 $ uvx ssoty audit examples/messy-setup
-ssoty audit — 2 Critical, 3 Warning, 6 FYI
+ssoty audit — 1 Critical, 3 Warning, 5 FYI
 
   [Critical] broken_symlink (claude-code)
       .../.claude/rules/broken-link.md
       symlink target does not resolve: ./nope.md
 
-  [Critical] dangling_cross_ref (codex)
+  [Warning] dangling_cross_ref (codex)
       .../.codex/skills/global-agent-rules/references/shared-style.md
-      references 'team-rules.md', which exists in another harness but is NOT
-      loaded by 'codex' — broken pointer across the harness boundary
+      references 'team-rules.md' — present in another harness but not loaded
+      here; verify the pointer is reachable in this harness's context
 
   [Warning] load_asymmetry (claude-code+codex)
       shared-style.md
@@ -77,9 +77,11 @@ ssoty audit — 2 Critical, 3 Warning, 6 FYI
       references 'meta-layout.md' (absent here, intentional per .ssotyignore)
 ```
 
-It distinguishes a **genuine** broken cross-reference (Critical) from
-**intentional** non-sharing you declared in `.ssotyignore` (FYI) — precision over
-noise.
+It tiers a **genuine** cross-harness divergence (Warning) above **intentional**
+non-sharing you declared in `.ssotyignore`, a canonically-shared (symlinked) pointer,
+or a per-harness entrypoint (all FYI) — precision over noise. The only structural
+`Critical` is `broken_symlink` (a symlink whose target is gone), so `--ci` blocks on
+a truly broken config, not on an intentional SSOT layout.
 
 ## Also measures: Context Tax (token rent)
 
@@ -107,11 +109,11 @@ Reproduce: `uvx ssoty metrics examples/messy-setup` (see [`benchmarks/REPORT.md`
 
 | Check | Severity | What it catches |
 |---|---|---|
-| `broken_symlink` | Critical | symlinked rule whose target is gone |
-| `dangling_cross_ref` | Critical / FYI | a rule references a sibling absent in this harness (FYI if declared intentional) |
+| `broken_symlink` | Critical | symlinked rule whose target is gone (the only structural Critical) |
+| `dangling_cross_ref` | Warning / FYI | a rule references a sibling absent in this harness (Warning = real cross-harness divergence; FYI if declared intentional, canonically-shared via symlink, a per-harness entrypoint, or not found anywhere) |
 | `load_asymmetry` | Warning | same rule, different load basis per harness |
-| `duplicate_content` | Warning | identical blocks duplicated across files (token rent) |
-| `non_shared_surface` | FYI | a rule present in one harness only |
+| `duplicate_content` | Warning / FYI | identical blocks duplicated within a harness (Warning = token rent); cross-harness expected SSOT sharing rolled up into one FYI |
+| `non_shared_surface` | FYI | a non-entrypoint rule present in one harness only (per-harness entrypoints are skipped) |
 | `skill_integrity` | Warning | skill dir without a `SKILL.md` |
 | `weak_directive` | FYI | a weak modal (`should`, `try to`, …) hedges a hard-requirement signal (`never`, `security`, …) on the same line in an always-on rule |
 
