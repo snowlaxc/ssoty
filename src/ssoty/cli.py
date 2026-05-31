@@ -8,6 +8,8 @@ Usage:
     ssoty fix     [PATH] [--apply] [--redact] [--scaffold-ignore]
     ssoty sync    [PATH] [--apply] [--method symlink] [--manifest PATH] [--redact]
     ssoty init    [PATH] [--apply] [--force] [--redact]
+    ssoty adopt   [PATH] [--apply] [--force] [--canonical-dir DIR] [--no-symlink-originals] [--redact]
+    ssoty add     RULE [PATH] [--common | --harness NAME] [--apply] [--force] [--manifest PATH] [--redact]
 
 PATH is the root that contains ``.claude`` / ``.codex`` (defaults to $HOME).
 For fixtures, pass the fixture dir, e.g. ``ssoty audit examples/messy-setup``.
@@ -21,6 +23,22 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ssoty import __version__
+from ssoty.adopt import (
+    PLACE_COMMON,
+    PLACE_HARNESS,
+    AddError,
+    add_choices,
+    add_needs_force,
+    adopt_needs_force,
+    apply_add_plan,
+    apply_adopt_plan,
+    build_add_plan,
+    build_adopt_plan,
+    render_add_apply,
+    render_add_preview,
+    render_adopt_apply,
+    render_adopt_preview,
+)
 from ssoty.checks import CheckContext, run_checks
 from ssoty.diff import diff_pair
 from ssoty.fix import (
@@ -231,6 +249,82 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_adopt(args: argparse.Namespace) -> int:
+    root = _resolve_root(args.path)
+    redactor = _redactor(args.redact)
+    surfaces = resolve_all(root)
+    if not surfaces:
+        print(f"ssoty adopt: no known harnesses found under {root} " "(nothing to adopt into a canonical source).")
+        return 0
+    try:
+        plan = build_adopt_plan(
+            root,
+            surfaces,
+            canonical_dir=args.canonical_dir,
+            symlink_originals=not args.no_symlink_originals,
+        )
+    except ManifestError as exc:
+        # Containment failure on the canonical dir (escapes root) -> exit 2, no mutation.
+        print(f"ssoty adopt: {redactor(str(exc))}", file=sys.stderr)
+        return 2
+
+    if not args.apply:
+        # PREVIEW is the DEFAULT: classify and print the proposed layout, write nothing.
+        print(redactor(render_adopt_preview(plan, len(surfaces))))
+        return 0
+
+    if adopt_needs_force(plan) and not args.force:
+        print(
+            "ssoty adopt: a canonical destination already exists with differing content; " "pass --force to overwrite",
+            file=sys.stderr,
+        )
+        return 2
+
+    results, backup_dir = apply_adopt_plan(plan)
+    print(redactor(render_adopt_apply(backup_dir, results)))
+    return 0
+
+
+def cmd_add(args: argparse.Namespace) -> int:
+    root = _resolve_root(args.path)
+    redactor = _redactor(args.redact)
+    surfaces = resolve_all(root)
+
+    # No placement chosen -> PREVIEW the candidate placements and require the user to pick.
+    if not args.common and not args.harness:
+        print(redactor(add_choices(root, surfaces, args.manifest)))
+        return 0
+
+    placement = PLACE_COMMON if args.common else PLACE_HARNESS
+    try:
+        plan = build_add_plan(
+            root,
+            args.rule,
+            placement,
+            args.harness,
+            surfaces,
+            manifest_explicit=args.manifest,
+        )
+    except (AddError, ManifestError) as exc:
+        print(f"ssoty add: {redactor(str(exc))}", file=sys.stderr)
+        return 2
+
+    if not args.apply:
+        print(redactor(render_add_preview(plan)))
+        return 0
+
+    if add_needs_force(plan) and not args.force:
+        print(
+            f"ssoty add: {plan.dest_rel} already exists with differing content; pass --force to overwrite",
+            file=sys.stderr,
+        )
+        return 2
+
+    result, backup_dir = apply_add_plan(plan)
+    print(redactor(render_add_apply(backup_dir, result)))
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ssoty", description="Static cross-harness rule coherence auditor.")
     parser.add_argument("--version", action="version", version=f"ssoty {__version__}")
@@ -303,6 +397,37 @@ def _build_parser() -> argparse.ArgumentParser:
     init.add_argument("--force", action="store_true", help="overwrite an existing ssoty.json (with --apply)")
     init.add_argument("--redact", action="store_true", help="mask home paths and emails")
     init.set_defaults(func=cmd_init)
+
+    adopt = sub.add_parser(
+        "adopt",
+        help="classify scattered rule copies into a canonical SSOT layout (PREVIEW by default)",
+    )
+    adopt.add_argument("path", nargs="?", help="root containing .claude/.codex (default: $HOME)")
+    adopt.add_argument("--apply", action="store_true", help="perform the moves (default: preview, writes nothing)")
+    adopt.add_argument("--force", action="store_true", help="overwrite a canonical dest that differs (with --apply)")
+    adopt.add_argument(
+        "--canonical-dir",
+        help="canonical root dir for the adopted layout (default: <root>/agent-rules)",
+    )
+    adopt.add_argument(
+        "--no-symlink-originals",
+        action="store_true",
+        help="do NOT replace originals with symlinks into canonical (just move/copy)",
+    )
+    adopt.add_argument("--redact", action="store_true", help="mask home paths and emails")
+    adopt.set_defaults(func=cmd_adopt)
+
+    add = sub.add_parser("add", help="place ONE new rule into the canonical SSOT (PREVIEW by default)")
+    add.add_argument("rule", help="path to an existing rule file to place")
+    add.add_argument("path", nargs="?", help="root containing .claude/.codex (default: $HOME)")
+    place = add.add_mutually_exclusive_group()  # not required: no-choice case is detectable
+    place.add_argument("--common", action="store_true", help="place into the canonical common/ (syncs to ALL)")
+    place.add_argument("--harness", metavar="NAME", help="place into this harness's own source")
+    add.add_argument("--apply", action="store_true", help="write the rule (default: preview, writes nothing)")
+    add.add_argument("--force", action="store_true", help="overwrite an existing dest that differs (with --apply)")
+    add.add_argument("--manifest", help="manifest path (default: ssoty.json in PATH) to resolve placement dirs")
+    add.add_argument("--redact", action="store_true", help="mask home paths and emails")
+    add.set_defaults(func=cmd_add)
     return parser
 
 

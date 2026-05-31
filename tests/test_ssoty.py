@@ -1782,3 +1782,326 @@ def test_init_file_entry_with_root_source_dir(tmp_path: Path):
     src = Source("GEMINI.md", ALWAYS_ON)
     # source_dir == "." -> the file source is the bare basename (no "./" prefix)
     assert _file_entry(src, ".") == {"target": "GEMINI.md", "sources": [{"file": "GEMINI.md"}]}
+
+
+# --- adopt: bootstrap scattered rule copies into a canonical SSOT ---
+# Every test builds a fake home under tmp_path; adopt --apply is NEVER run against a real
+# ~/.claude / ~/.codex. Assertions check the sandbox via resolve_all / direct stat only.
+
+
+def _adopt_home(tmp_path: Path) -> Path:
+    """Fake home with: an identical-content rule shared by 2 harnesses (common candidate),
+    a one-harness rule (harness-specific), a per-harness entrypoint, and a divergent pair.
+    """
+    root = tmp_path / "home"
+    cr = root / ".claude" / "rules"
+    cont = root / ".continue" / "rules"
+    cr.mkdir(parents=True)
+    cont.mkdir(parents=True)
+    # COMMON_CANDIDATE: same name, byte-identical content, two distinct harnesses/realpaths.
+    (cr / "shared.md").write_text("synthetic shared rule\nline two\n", encoding="utf-8")
+    (cont / "shared.md").write_text("synthetic shared rule\nline two\n", encoding="utf-8")
+    # HARNESS_SPECIFIC: present in exactly one harness.
+    (cr / "claude-only.md").write_text("synthetic claude-only rule", encoding="utf-8")
+    # DIVERGENT: same name, different content, two harnesses.
+    (cr / "div.md").write_text("synthetic version A", encoding="utf-8")
+    (cont / "div.md").write_text("synthetic version B — different", encoding="utf-8")
+    # ENTRYPOINT: per-harness, never movable.
+    (root / ".gemini").mkdir()
+    (root / ".gemini" / "GEMINI.md").write_text("synthetic gemini entrypoint", encoding="utf-8")
+    return root
+
+
+def test_adopt_preview_classifies_common_vs_harness_specific(tmp_path: Path):
+    from ssoty.adopt import (
+        COMMON_CANDIDATE,
+        DIVERGENT,
+        ENTRYPOINT,
+        HARNESS_SPECIFIC,
+        build_adopt_plan,
+    )
+
+    root = _adopt_home(tmp_path)
+    plan = build_adopt_plan(root, resolve_all(root))
+    by_name = {r.name: r for r in plan.rules}
+    assert by_name["shared.md"].kind == COMMON_CANDIDATE
+    assert by_name["shared.md"].canonical_rel == "common/shared.md"
+    assert by_name["claude-only.md"].kind == HARNESS_SPECIFIC
+    assert by_name["claude-only.md"].canonical_rel == "claude-code/claude-only.md"
+    assert by_name["div.md"].kind == DIVERGENT
+    assert by_name["div.md"].canonical_rel == ""  # never auto-picked
+    assert by_name["GEMINI.md"].kind == ENTRYPOINT
+
+
+def test_adopt_preview_writes_nothing(tmp_path: Path, capsys):
+    root = _adopt_home(tmp_path)
+    before = sorted(str(p) for p in root.rglob("*"))
+    assert main(["adopt", str(root)]) == 0
+    out = capsys.readouterr().out
+    assert "PREVIEW" in out
+    assert "UNRESOLVED DIVERGENCE" in out
+    after = sorted(str(p) for p in root.rglob("*"))
+    assert before == after  # preview created/moved nothing
+    assert not (root / "agent-rules").exists()
+    assert not (root / ".ssoty-backup").exists()
+
+
+def test_adopt_apply_creates_canonical_and_symlinks_with_backup(tmp_path: Path, capsys):
+    root = _adopt_home(tmp_path)
+    assert main(["adopt", str(root), "--apply"]) == 0
+    out = capsys.readouterr().out
+    assert "backup written to:" in out
+
+    # COMMON_CANDIDATE moved into canonical common/, both originals now symlinks to it.
+    canon_shared = root / "agent-rules" / "common" / "shared.md"
+    assert canon_shared.is_file() and not canon_shared.is_symlink()
+    for original in (root / ".claude" / "rules" / "shared.md", root / ".continue" / "rules" / "shared.md"):
+        assert original.is_symlink()
+        assert os.path.realpath(original) == os.path.realpath(canon_shared)
+
+    # HARNESS_SPECIFIC moved into canonical <harness>/.
+    canon_only = root / "agent-rules" / "claude-code" / "claude-only.md"
+    assert canon_only.is_file() and not canon_only.is_symlink()
+    assert (root / ".claude" / "rules" / "claude-only.md").is_symlink()
+
+    # Backups exist for every moved/relinked node.
+    backups = list((root / ".ssoty-backup").rglob("shared.md"))
+    assert backups  # the moved content was preserved before mutation
+
+
+def test_adopt_divergent_is_flagged_not_merged_both_backed_up(tmp_path: Path, capsys):
+    root = _adopt_home(tmp_path)
+    assert main(["adopt", str(root), "--apply"]) == 0
+    out = capsys.readouterr().out
+    assert "divergent rule(s) flagged and deferred" in out
+    # NEVER writes a single common/div.md from a divergent set.
+    assert not (root / "agent-rules" / "common" / "div.md").exists()
+    # Originals are LEFT IN PLACE (real files, not symlinks), content preserved.
+    a = root / ".claude" / "rules" / "div.md"
+    b = root / ".continue" / "rules" / "div.md"
+    assert a.is_file() and not a.is_symlink()
+    assert b.is_file() and not b.is_symlink()
+    assert a.read_text(encoding="utf-8") == "synthetic version A"
+    assert b.read_text(encoding="utf-8") == "synthetic version B — different"
+    # Both variants were backed up.
+    div_backups = list((root / ".ssoty-backup").rglob("div.md"))
+    assert len(div_backups) == 2
+
+
+def test_adopt_apply_is_idempotent(tmp_path: Path, capsys):
+    root = _adopt_home(tmp_path)
+    assert main(["adopt", str(root), "--apply"]) == 0
+    capsys.readouterr()
+    # Second apply: no new moves. shared.md now collapses to ONE inode (already-shared),
+    # claude-only.md original already symlinks to canonical (skipped via _same_link).
+    assert main(["adopt", str(root), "--apply"]) == 0
+    out = capsys.readouterr().out
+    assert "already shared" in out
+    assert "already linked" in out
+
+
+def test_adopt_no_symlink_originals_leaves_real_files(tmp_path: Path, capsys):
+    root = _adopt_home(tmp_path)
+    assert main(["adopt", str(root), "--apply", "--no-symlink-originals"]) == 0
+    capsys.readouterr()
+    # Content is COPIED into canonical, but originals remain real files (not symlinks).
+    assert (root / "agent-rules" / "common" / "shared.md").is_file()
+    assert (root / ".claude" / "rules" / "shared.md").is_file()
+    assert not (root / ".claude" / "rules" / "shared.md").is_symlink()
+
+
+def test_adopt_canonical_dir_escaping_root_is_refused(tmp_path: Path, capsys):
+    root = _adopt_home(tmp_path)
+    outside = tmp_path / "outside"
+    rc = main(["adopt", str(root), "--apply", "--canonical-dir", str(outside)])
+    assert rc == 2
+    assert not outside.exists()  # nothing written outside the declared root
+    assert not (root / "agent-rules").exists()
+
+
+def test_adopt_apply_no_crash_when_original_is_already_symlink(tmp_path: Path):
+    # Regression: a harness-specific rule whose source IS the original (same path) was backed
+    # up twice in one run; once it had become a symlink the second _backup_node hit
+    # FileExistsError. _backup_node is now idempotent per run. Re-running adopt --apply on an
+    # already-adopted tree (originals are symlinks into canonical) must NOT crash.
+    root = tmp_path / "home"
+    cr = root / ".claude" / "rules"
+    cr.mkdir(parents=True)
+    (cr / "only.md").write_text("synthetic harness-only rule\n", encoding="utf-8")
+    assert main(["adopt", str(root), "--apply"]) == 0  # first adopt: moves + symlinks original
+    assert (cr / "only.md").is_symlink()
+    # second adopt --apply over the symlinked original must be a clean no-op, not a crash
+    assert main(["adopt", str(root), "--apply"]) == 0
+    canon = root / "agent-rules" / "claude-code" / "only.md"
+    assert canon.is_file() and not canon.is_symlink()
+    assert os.path.realpath(cr / "only.md") == os.path.realpath(canon)
+
+
+def test_adopt_skips_broken_symlink_no_fabricated_divergence(tmp_path: Path):
+    from ssoty.adopt import COMMON_CANDIDATE, build_adopt_plan
+
+    root = tmp_path / "home"
+    cr = root / ".claude" / "rules"
+    cont = root / ".continue" / "rules"
+    cr.mkdir(parents=True)
+    cont.mkdir(parents=True)
+    (cr / "r.md").write_text("real content\n", encoding="utf-8")
+    (cont / "r.md").write_text("real content\n", encoding="utf-8")
+    # A broken symlink with the SAME name in a third harness must be filtered (text="")
+    # so it does not fabricate divergence against the two identical real copies.
+    (root / ".cursor" / "rules").mkdir(parents=True)
+    (root / ".cursor" / "rules" / "r.mdc").symlink_to(tmp_path / "does-not-exist.md")
+    plan = build_adopt_plan(root, resolve_all(root))
+    by_name = {r.name: r for r in plan.rules}
+    # r.md still classified as a clean common candidate (broken r.mdc is a different basename here)
+    assert by_name["r.md"].kind == COMMON_CANDIDATE
+
+
+def test_adopt_no_harnesses_exits_zero(tmp_path: Path, capsys):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert main(["adopt", str(empty)]) == 0
+    assert "no known harnesses" in capsys.readouterr().out
+
+
+def test_adopt_already_shared_proposes_no_move(tmp_path: Path):
+    from ssoty.adopt import ALREADY_SHARED, build_adopt_plan
+
+    root = tmp_path / "home"
+    canon = root / "agent-rules" / "common"
+    canon.mkdir(parents=True)
+    (canon / "s.md").write_text("synthetic already shared", encoding="utf-8")
+    cr = root / ".claude" / "rules"
+    cont = root / ".continue" / "rules"
+    cr.mkdir(parents=True)
+    cont.mkdir(parents=True)
+    (cr / "s.md").symlink_to(canon / "s.md")
+    (cont / "s.md").symlink_to(canon / "s.md")
+    plan = build_adopt_plan(root, resolve_all(root))
+    by_name = {r.name: r for r in plan.rules}
+    assert by_name["s.md"].kind == ALREADY_SHARED
+
+
+# --- add: place ONE new rule into the canonical SSOT ---
+
+
+def _add_home(tmp_path: Path) -> tuple[Path, Path]:
+    """Fake home with one present harness; return (root, new_rule_file)."""
+    root = tmp_path / "home"
+    (root / ".claude" / "rules").mkdir(parents=True)
+    (root / ".claude" / "rules" / "existing.md").write_text("synthetic existing", encoding="utf-8")
+    new_rule = tmp_path / "new-rule.md"
+    new_rule.write_text("synthetic brand new rule\n", encoding="utf-8")
+    return root, new_rule
+
+
+def test_add_no_choice_previews_and_does_not_guess(tmp_path: Path, capsys):
+    root, new_rule = _add_home(tmp_path)
+    assert main(["add", str(new_rule), str(root)]) == 0
+    out = capsys.readouterr().out
+    assert "--common" in out and "--harness" in out
+    # No write happened (no choice => no guess).
+    assert not (root / "agent-rules").exists()
+
+
+def test_add_common_apply_writes_into_canonical_common(tmp_path: Path, capsys):
+    root, new_rule = _add_home(tmp_path)
+    assert main(["add", str(new_rule), str(root), "--common", "--apply"]) == 0
+    dest = root / "agent-rules" / "common" / "new-rule.md"
+    assert dest.is_file()
+    assert dest.read_text(encoding="utf-8") == "synthetic brand new rule\n"
+    assert "ssoty sync" in capsys.readouterr().out  # handoff printed
+
+
+def test_add_harness_apply_writes_into_that_harness(tmp_path: Path, capsys):
+    root, new_rule = _add_home(tmp_path)
+    assert main(["add", str(new_rule), str(root), "--harness", "claude-code", "--apply"]) == 0
+    capsys.readouterr()
+    # No manifest -> canonical <harness>/ dir under the common parent.
+    assert (root / "agent-rules" / "claude-code" / "new-rule.md").is_file()
+
+
+def test_add_harness_uses_manifest_target_when_present(tmp_path: Path, capsys):
+    root, new_rule = _add_home(tmp_path)
+    manifest = root / "ssoty.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "method": "symlink",
+                "common": {"sources": [{"dir": "agent-rules/common", "pattern": "*.md"}]},
+                "harnesses": {"claude-code": {"target": ".claude/rules", "common": True}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert main(["add", str(new_rule), str(root), "--harness", "claude-code", "--apply"]) == 0
+    capsys.readouterr()
+    # With a manifest, the harness target dir (.claude/rules) is used.
+    assert (root / ".claude" / "rules" / "new-rule.md").is_file()
+
+
+def test_add_unknown_harness_exits_2(tmp_path: Path, capsys):
+    root, new_rule = _add_home(tmp_path)
+    assert main(["add", str(new_rule), str(root), "--harness", "bogus", "--apply"]) == 2
+    assert "unknown harness" in capsys.readouterr().err
+
+
+def test_add_missing_rule_file_exits_2(tmp_path: Path, capsys):
+    root, _ = _add_home(tmp_path)
+    assert main(["add", str(tmp_path / "nope.md"), str(root), "--common", "--apply"]) == 2
+    assert "not found" in capsys.readouterr().err
+
+
+def test_add_dry_run_writes_nothing(tmp_path: Path, capsys):
+    root, new_rule = _add_home(tmp_path)
+    assert main(["add", str(new_rule), str(root), "--common"]) == 0
+    assert "PREVIEW" in capsys.readouterr().out
+    assert not (root / "agent-rules").exists()
+
+
+def test_add_backup_first_on_overwrite_requires_force(tmp_path: Path, capsys):
+    root, new_rule = _add_home(tmp_path)
+    dest = root / "agent-rules" / "common" / "new-rule.md"
+    dest.parent.mkdir(parents=True)
+    dest.write_text("OLD differing content", encoding="utf-8")
+    # Without --force: refused (exit 2), original untouched.
+    assert main(["add", str(new_rule), str(root), "--common", "--apply"]) == 2
+    assert dest.read_text(encoding="utf-8") == "OLD differing content"
+    capsys.readouterr()
+    # With --force: backed up first, then overwritten.
+    assert main(["add", str(new_rule), str(root), "--common", "--apply", "--force"]) == 0
+    out = capsys.readouterr().out
+    assert "backup written to:" in out
+    assert dest.read_text(encoding="utf-8") == "synthetic brand new rule\n"
+    assert list((root / ".ssoty-backup").rglob("new-rule.md"))  # old content preserved
+
+
+def test_add_idempotent_identical_content_skips(tmp_path: Path, capsys):
+    root, new_rule = _add_home(tmp_path)
+    assert main(["add", str(new_rule), str(root), "--common", "--apply"]) == 0
+    capsys.readouterr()
+    # Re-run with identical content: no write, no backup, exit 0.
+    assert main(["add", str(new_rule), str(root), "--common", "--apply"]) == 0
+    out = capsys.readouterr().out
+    assert "unchanged" in out
+    assert not (root / ".ssoty-backup").exists()
+
+
+def test_add_never_writes_outside_root(tmp_path: Path, capsys):
+    root, new_rule = _add_home(tmp_path)
+    # A manifest whose harness target escapes root must be refused at build time.
+    manifest = root / "ssoty.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "method": "symlink",
+                "common": {"sources": [{"dir": "../escape", "pattern": "*.md"}]},
+                "harnesses": {"claude-code": {"target": ".claude/rules", "common": True}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert main(["add", str(new_rule), str(root), "--common", "--apply"]) == 2
+    assert not (tmp_path / "escape").exists()
