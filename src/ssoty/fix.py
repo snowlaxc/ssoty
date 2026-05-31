@@ -119,6 +119,12 @@ def _backup_node(src: Path, root: Path, backup_dir: Path) -> Path:
         rel = Path(src.name)
     dst = backup_dir / rel
     dst.parent.mkdir(parents=True, exist_ok=True)
+    # Idempotent within one backup run: backing the SAME node up twice (e.g. a
+    # harness-specific rule whose source and original are the same path) must not
+    # crash on the second os.symlink with FileExistsError — the existing backup
+    # already preserves identical content, so skip.
+    if dst.exists() or dst.is_symlink():
+        return dst
     if src.is_symlink():
         # Recreate the link node with its (possibly dead) target. Done explicitly
         # via os.symlink rather than shutil.copy2(follow_symlinks=False), whose
