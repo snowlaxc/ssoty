@@ -5,6 +5,48 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](ht
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-05-31
+### Added
+- **New `ssoty adopt` command — bootstrap a canonical SSOT from scattered copies.** Where
+  `init`/`sync` assume a canonical source already exists, `adopt` *builds* it: it scans the
+  harnesses present at a root (reusing the auditor's `resolve_all` — no second filesystem walk)
+  and classifies every same-named rule using the **exact content-identity grouping** of the
+  `content_divergence` check — bucketing each name by `(realpath, normalized content)` so an
+  already-symlinked SSOT collapses to one bucket. Four outcomes per name: **COMMON_CANDIDATE**
+  (byte-identical across ≥2 harnesses → canonical `common/<name>`), **HARNESS_SPECIFIC** (one
+  harness → `<harness>/<name>`), **ALREADY_SHARED** (already one inode → no move), and
+  **DIVERGENT** (same name, different content). The proposed canonical tree is printed in the
+  readable `init`-style layout, with a content fingerprint per divergent variant.
+- **Divergence is flagged, never auto-merged.** A DIVERGENT rule backs up every variant, leaves
+  the originals in place, and prints an explicit "resolve manually then re-run" line — `adopt`
+  **never** writes a single `common/<name>` from a divergent set (a hard invariant, identical to
+  how `audit` defines divergence so the two never contradict). Per-harness entrypoints
+  (`CLAUDE.md`/`AGENTS.md`/`GEMINI.md`/…) are excluded from consolidation and left in place;
+  broken symlinks (resolver `text=''`) are filtered before bucketing so an empty string never
+  fabricates divergence.
+- **New `ssoty add` command — place ONE new rule into the canonical SSOT.** `--common` writes
+  into the canonical `common/` source (read from the `ssoty.json` manifest, falling back to the
+  `agent-rules/common` placeholder); `--harness NAME` writes into that harness's own source
+  (manifest target, else a canonical `<harness>/` dir). The two are **mutually exclusive**; with
+  neither, `add` previews the candidate placements and **refuses to guess**. It writes exactly one
+  file and prints the next command (`ssoty sync`) — no implicit chaining.
+- **Lifecycle: `adopt` → `init` → `add` → `sync` → `audit`.** `adopt`'s default canonical root
+  (`<root>/agent-rules`) lines up with `init.PLACEHOLDER_DIR` so the stages compose: after `adopt`
+  replaces originals with symlinks into canonical, `init` infers the same canonical dir.
+### Safety
+- **Hard safety, mirroring `fix`/`sync`/`init`.** Both commands are **PREVIEW by default** (write
+  nothing, create no backup dir). `--apply` mutates; `--force` is required only to overwrite a
+  destination that already exists with *differing* content. On `--apply`, **every** rule file
+  moved/replaced and **every** original about to become a symlink is backed up via `fix._backup_node`
+  into one timestamped `.ssoty-backup/<stamp>/` *before* any mutation (backup-before-mutate ordering
+  is the highest-stakes invariant — both commands touch real rule files). All destinations are
+  validated under the root via `sync._require_under_root` **and** `sync._require_realpath_under_root`
+  (an escaping `--canonical-dir` or manifest target is rejected, exit 2, before any write).
+  Idempotent: a re-run skips originals already symlinked to canonical (`sync._same_link`) and
+  identical-content writes (`normalize_content` equality). Deterministic (sorted iteration,
+  lexicographic tie-breaks), offline, stdlib-only (`hashlib` for fingerprints is stdlib);
+  `dependencies` stays `[]`. Version bumped 0.3.0 → 0.4.0.
+
 ## [0.3.0] — 2026-05-30
 ### Added
 - **New `ssoty init` command — zero-to-manifest scaffolding.** It detects the harnesses

@@ -192,6 +192,53 @@ Sync는 **`ssoty.json` manifest**(표준 라이브러리 JSON만 — 추가 의�
 사용자의 무관한 심볼릭 링크는 절대 건드리지 않는다. `--method symlink`가 기본이자 현재
 유일한 방법이다.
 
+### Adopt — 흩어진 복사본에서 정규 SSOT 부트스트랩 (dry-run + 백업 우선)
+`init`/`sync` 이전 단계가 `adopt`다. 루트에 존재하는 하네스를 스캔해 같은 이름의 룰을 분류하고,
+정규 레이아웃을 제안한다 — **두 개 이상 하네스에서 내용이 바이트 단위로 동일한** 룰은
+`common/<name>`, 한 하네스에만 있는 룰은 `<harness>/<name>`. `init`이 추론하고 `sync`가 배포하는
+**정규 소스를 만들어내는** 단계로, "복사본이 사방에 흩어진" 설정을 한 번에 단일 SSOT로 정리한다.
+
+```bash
+ssoty adopt                       # PREVIEW: 분류 + 제안 정규 트리 출력, 아무것도 쓰지 않음
+ssoty adopt --apply               # agent-rules/로 룰 이동/복사, 원본을 심볼릭 링크로 교체, 백업 우선
+ssoty adopt --apply --no-symlink-originals   # 이동/복사만; 원본은 실제 파일로 유지
+ssoty adopt --canonical-dir my-rules --apply # 커스텀 정규 루트 (PATH 하위로 검증)
+ssoty adopt --apply && ssoty init && ssoty sync   # 전체 라이프사이클
+```
+
+`adopt`는 감사자의 `content_divergence` 체크와 **완전히 동일한 내용-동일성 그룹화**를 재사용한다 —
+각 이름을 `(realpath, 정규화된 내용)`으로 버킷팅하므로 이미 심볼릭 링크된 SSOT는 한 버킷으로 합쳐진다.
+이름마다 네 가지 결과: **COMMON_CANDIDATE**(≥2 하네스에서 동일 → `common/`), **HARNESS_SPECIFIC**
+(한 하네스 → `<harness>/`), **ALREADY_SHARED**(이미 단일 inode → 이동 없음), **DIVERGENT**(같은 이름,
+*다른* 내용). 발산 룰은 **플래그만 하고 절대 자동 병합하지 않는다**: 모든 변형을 백업하고 원본은
+그대로 두며, 변형별 짧은 내용 지문을 출력해 사용자가 의도적으로 충돌을 해소하게 한다 — `adopt`는
+발산 집합에서 단일 `common/<name>`을 절대 쓰지 않는다. 하네스별 **엔트리포인트**
+(`CLAUDE.md`/`AGENTS.md`/`GEMINI.md`/…)는 통합 대상에서 제외된다(각 하네스가 자기 복사본을 소유) —
+그대로 둔다. 안전 계약은 `fix`/`sync`와 동일: **기본 preview**, `--apply`는 모든 이동/교체 노드를
+변경 *전에* `.ssoty-backup/<timestamp>/`로 백업, 목적지는 루트 하위로 검증(루트를 벗어나는
+`--canonical-dir`은 쓰기 전에 거부, exit 2), idempotent(재실행 시 이미 링크된 원본과 동일 내용 쓰기를
+건너뜀), 내용이 다른 정규 목적지를 덮어쓸 때만 `--force` 필요.
+
+### Add — 정규 SSOT에 새 룰 하나 추가
+정규 소스가 생긴 뒤에는 `ssoty add`로 새 룰 하나를 올바른 위치에 넣어 정확히 전파시킨다:
+
+```bash
+ssoty add my-new-rule.md                         # 선택 없음 -> 후보 배치 출력, 추측하지 않음
+ssoty add my-new-rule.md --common --apply        # 정규 common/에 기록 (모든 하네스로 sync)
+ssoty add my-new-rule.md --harness codex --apply # 한 하네스의 자체 소스에 기록
+ssoty add my-new-rule.md --common --apply && ssoty sync   # 그 후 배포
+```
+
+`add`는 정규 `common` 디렉터리와 하네스별 타깃을 `ssoty.json` manifest에서 읽는다(manifest가 아직 없으면
+`agent-rules/common` 플레이스홀더로 폴백). `--common`과 `--harness`는 **상호 배타적**이며, 둘 다 없으면
+`add`는 가능한 배치를 미리 보여주고 **추측을 거부**한다. 동일 안전 계약: **기본 preview**, `--apply`로 기록,
+덮어쓸 때 백업 우선, 내용이 다르면 `--force` 필요, idempotent(동일 내용은 건너뜀), 목적지는 항상 루트 하위로
+검증. 정확히 **파일 하나**만 쓰고 다음 명령(`ssoty sync`)을 출력한다 — 암묵적 체이닝 없음, 사용자가 제어를 유지.
+
+> **라이프사이클:** `adopt` → `init` → `add` → `sync` → `audit`. `adopt`가 정규 소스를 만들고,
+> `init`이 그것을 참조하는 manifest를 스캐폴딩하며, `add`가 새 룰을 넣고, `sync`가 전부 심볼릭 링크로
+> 배포하고, `audit`이 일관성을 증명한다.
+
 ### CI (GitHub Action)
 ```yaml
 - uses: snowlaxc/ssoty@v0

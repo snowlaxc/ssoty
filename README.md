@@ -225,6 +225,59 @@ no-op, no new backups) and cleans only *its own* orphaned symlinks (links pointi
 the canonical source whose target vanished) — your unrelated symlinks are never touched.
 `--method symlink` is the default and currently only method.
 
+### Adopt — bootstrap a canonical SSOT from scattered copies (dry-run + backup first)
+Before `init`/`sync` there is `adopt`: it scans the harnesses present at a root, classifies
+every same-named rule, and proposes a canonical layout — `common/<name>` for rules that are
+**byte-identical across two or more harnesses**, `<harness>/<name>` for harness-private rules.
+It **builds the canonical source that `init` infers and `sync` distributes**, turning a messy
+"copies everywhere" setup into a single SSOT in one command.
+
+```bash
+ssoty adopt                       # PREVIEW: classify + print the proposed canonical tree, write nothing
+ssoty adopt --apply               # move/copy rules into agent-rules/, symlink originals, back up first
+ssoty adopt --apply --no-symlink-originals   # just move/copy; leave originals as real files
+ssoty adopt --canonical-dir my-rules --apply # custom canonical root (validated under PATH)
+ssoty adopt --apply && ssoty init && ssoty sync   # the full lifecycle
+```
+
+`adopt` reuses the **exact content-identity grouping** the auditor's `content_divergence` check
+uses — it buckets each name by `(realpath, normalized content)`, so an already-symlinked SSOT
+collapses to one bucket. Four outcomes per name: **COMMON_CANDIDATE** (identical across ≥2
+harnesses → `common/`), **HARNESS_SPECIFIC** (one harness → `<harness>/`), **ALREADY_SHARED**
+(already one inode → no move), and **DIVERGENT** (same name, *different* content). Divergent rules
+are **flagged, never auto-merged**: every variant is backed up, the originals are left in place,
+and a short content fingerprint per variant is printed so you resolve the conflict deliberately —
+`adopt` never writes a single `common/<name>` from a divergent set. Per-harness **entrypoints**
+(`CLAUDE.md`/`AGENTS.md`/`GEMINI.md`/…) are excluded from consolidation — each harness owns its own
+copy by design — and left in place. Hard safety mirrors `fix`/`sync`: **preview by default**;
+`--apply` backs up every moved/replaced node into `.ssoty-backup/<timestamp>/` *before* any
+mutation; destinations are validated under the root (an escaping `--canonical-dir` is rejected,
+exit 2, before any write); idempotent (a re-run skips already-symlinked originals and
+identical-content writes); `--force` is required only to overwrite a canonical dest that differs.
+
+### Add — place ONE new rule into the canonical SSOT
+Once you have a canonical source, `ssoty add` drops a single new rule into the right place so it
+propagates correctly:
+
+```bash
+ssoty add my-new-rule.md                         # no choice -> prints candidate placements, does NOT guess
+ssoty add my-new-rule.md --common --apply        # write into the canonical common/ (syncs to ALL harnesses)
+ssoty add my-new-rule.md --harness codex --apply # write into one harness's own source
+ssoty add my-new-rule.md --common --apply && ssoty sync   # then distribute
+```
+
+`add` reads the canonical `common` dir and per-harness targets from your `ssoty.json` manifest
+(falling back to the `agent-rules/common` placeholder when there is no manifest yet). `--common`
+and `--harness` are **mutually exclusive**; with neither, `add` previews the available placements
+and **refuses to guess**. Same safety contract: **preview by default**, `--apply` to write, backup
+first on overwrite, `--force` required to overwrite differing content, idempotent (identical content
+is skipped), and the destination is always validated under the root. It writes exactly **one file**
+and prints the next command (`ssoty sync`) — no implicit chaining, you stay in control.
+
+> **Lifecycle:** `adopt` → `init` → `add` → `sync` → `audit`. `adopt` builds the canonical
+> source; `init` scaffolds the manifest that references it; `add` drops in new rules; `sync`
+> distributes everything as symlinks; `audit` proves coherence.
+
 ### CI (GitHub Action)
 ```yaml
 - uses: snowlaxc/ssoty@v0
