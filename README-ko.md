@@ -144,6 +144,25 @@ ssoty fix --apply --scaffold-ignore   # 비공유 룰 이름을 .ssotyignore에 
 않으며, idempotent하다(다시 실행해도 아무 일 없음). 백업이 커밋되지 않도록
 `.ssoty-backup/`를 gitignore에 추가하라.
 
+### Init — manifest 스캐폴딩 (zero to `ssoty.json`)
+`sync`가 처음인가? `ssoty init`은 루트에 *이미 존재하는* 하네스를 탐지해 시작용
+`ssoty.json`을 대신 써준다 — `sync`로 가는 한 줄짜리 on-ramp이다:
+
+```bash
+ssoty init                      # PREVIEW: 하네스 탐지, 제안 ssoty.json 출력, 아무것도 안 씀
+ssoty init --apply              # ./ssoty.json 작성 (기존 파일은 덮어쓰기 거부)
+ssoty init --apply --force      # 기존 ssoty.json 덮어쓰기
+ssoty init && ssoty sync        # 스캐폴딩 후 링크 계획 미리보기
+```
+
+`init`은 **`audit`와 동일한 탐지**(resolve_all, 두 번째 파일시스템 walk 없음)를 재사용하므로,
+실제 룰 문서가 해석된 하네스만 정확히 스캐폴딩한다. 룰이 이미 공유 디렉터리로 심볼릭 링크돼
+있으면 그 디렉터리를 정규 `common` 소스로 추론하고 각 하네스에 `"common": true`를 단다.
+추론이 안 되면 `_comment`가 달린 안전한 **placeholder** common 소스를 출력한다. **기본이
+preview**(아무것도 안 씀)이고, **오직** `ssoty.json`만 쓰며(룰 파일은 절대 건드리지 않음),
+기존 manifest는 `--force` 없이 **덮어쓰지 않는다**. 출력된 manifest는 그대로 `sync`로
+round-trip된다.
+
 ### Sync — 감사자에서 관리자로 (dry-run + 백업 우선)
 `ssoty audit`는 하네스가 *갈라졌다고 알려준다*. `ssoty sync`는 *원인을 고친다*:
 **하나의 정규 룰 소스**를 모든 하네스 타깃에 심볼릭 링크로 배포해, 모든 모델이

@@ -1506,3 +1506,279 @@ def test_sync_file_target_with_two_file_sources_is_rejected(tmp_path: Path):
     }
     with pytest.raises(ManifestError, match="expected 1"):
         build_plan(root, manifest, root)
+
+
+# --- init: scaffold a starter ssoty.json from present harnesses (tmp_path ONLY) ---
+# Every test builds a fake home under tmp_path; ssoty init is NEVER run against a real $HOME.
+
+
+def _init_home_symlinked(tmp_path: Path) -> Path:
+    """Fake home: a canonical agent-rules/common dir, with claude-code rules + codex AGENTS.md
+    + gemini GEMINI.md all SYMLINKED into it (so the common source is inferable)."""
+    root = tmp_path / "home"
+    canon = root / "agent-rules" / "common"
+    canon.mkdir(parents=True)
+    (canon / "team-defaults.md").write_text("synthetic shared rule for /home/dev", encoding="utf-8")
+    (canon / "AGENTS.md").write_text("synthetic agents entrypoint", encoding="utf-8")
+    (canon / "GEMINI.md").write_text("synthetic gemini entrypoint", encoding="utf-8")
+    cr = root / ".claude" / "rules"
+    cr.mkdir(parents=True)
+    (cr / "team-defaults.md").symlink_to(canon / "team-defaults.md")
+    (root / ".codex").mkdir()
+    (root / ".codex" / "AGENTS.md").symlink_to(canon / "AGENTS.md")
+    (root / ".gemini").mkdir()
+    (root / ".gemini" / "GEMINI.md").symlink_to(canon / "GEMINI.md")
+    return root
+
+
+def _init_home_copies(tmp_path: Path) -> Path:
+    """Fake home with REAL copied rule files (no symlinks) -> common source not inferable."""
+    root = tmp_path / "home"
+    cr = root / ".claude" / "rules"
+    cr.mkdir(parents=True)
+    (cr / "a.md").write_text("synthetic real copy", encoding="utf-8")
+    (root / "GEMINI.md").write_text("synthetic gemini", encoding="utf-8")
+    return root
+
+
+def test_init_build_manifest_detects_present_harnesses(tmp_path: Path):
+    from ssoty.init import build_init_manifest
+
+    root = _init_home_symlinked(tmp_path)
+    surfaces = resolve_all(root)
+    manifest = build_init_manifest(root, surfaces)
+    # (a) detected harnesses == resolve_all keys
+    assert set(manifest["harnesses"]) == set(surfaces)
+    assert set(surfaces) == {"claude-code", "codex", "gemini"}
+
+
+def test_init_infers_common_source_from_symlinks(tmp_path: Path):
+    from ssoty.init import build_init_manifest
+
+    root = _init_home_symlinked(tmp_path)
+    manifest = build_init_manifest(root, resolve_all(root))
+    # (b) inferred common source -> no placeholder comment, claude-code uses common:true
+    assert "_comment" not in manifest
+    assert manifest["common"]["sources"][0]["dir"] == "agent-rules/common"
+    assert manifest["harnesses"]["claude-code"] == {"target": ".claude/rules", "common": True}
+    # file-target harnesses point at the canonical dir's matching basename
+    assert manifest["harnesses"]["codex"]["sources"] == [{"file": "agent-rules/common/AGENTS.md"}]
+    assert manifest["harnesses"]["gemini"]["sources"] == [{"file": "agent-rules/common/GEMINI.md"}]
+
+
+def test_init_modal_parent_ignores_outlier_symlink(tmp_path: Path):
+    # Regression: a few outlier symlinks into a SIBLING dir (agent-rules/claude) must NOT pull
+    # the inferred common source up to the broad ancestor (agent-rules/). The MAJORITY parent
+    # (agent-rules/common) wins; commonpath would wrongly choose agent-rules/.
+    from ssoty.init import build_init_manifest
+
+    root = tmp_path / "home"
+    common = root / "agent-rules" / "common"
+    claude_only = root / "agent-rules" / "claude"
+    common.mkdir(parents=True)
+    claude_only.mkdir(parents=True)
+    for n in ("a.md", "b.md", "c.md"):  # majority: 3 links into common
+        (common / n).write_text("shared", encoding="utf-8")
+    (claude_only / "_meta.md").write_text("claude-only outlier", encoding="utf-8")  # 1 outlier
+    cr = root / ".claude" / "rules"
+    cr.mkdir(parents=True)
+    for n in ("a.md", "b.md", "c.md"):
+        (cr / n).symlink_to(common / n)
+    (cr / "_meta.md").symlink_to(claude_only / "_meta.md")  # the outlier
+
+    manifest = build_init_manifest(root, resolve_all(root))
+    assert manifest["common"]["sources"][0]["dir"] == "agent-rules/common"  # NOT agent-rules
+    assert "_comment" not in manifest  # inferred, not placeholder
+
+
+def test_init_placeholder_when_no_symlinks(tmp_path: Path):
+    from ssoty.init import build_init_manifest
+
+    root = _init_home_copies(tmp_path)
+    manifest = build_init_manifest(root, resolve_all(root))
+    # (c) placeholder when copies: a _comment is present, dir is the placeholder
+    assert "_comment" in manifest
+    assert "PLACEHOLDER" in manifest["_comment"]
+    assert manifest["common"]["sources"][0]["dir"] == "agent-rules/common"
+    # without an inferred symlink, claude-code falls back to an explicit sources entry
+    assert manifest["harnesses"]["claude-code"]["sources"] == [{"dir": "agent-rules/common", "pattern": "*.md"}]
+
+
+def test_init_manifest_round_trips_through_build_plan(tmp_path: Path):
+    # (d) the emitted manifest is VALID for sync: load_manifest -> build_plan, no error, non-empty plan.
+    from ssoty.init import build_init_manifest, render_manifest
+    from ssoty.sync import build_plan, load_manifest
+
+    root = _init_home_symlinked(tmp_path)
+    manifest = build_init_manifest(root, resolve_all(root))
+    mpath = root / "ssoty.json"
+    mpath.write_text(render_manifest(manifest), encoding="utf-8")
+    loaded = load_manifest(mpath)
+    plan = build_plan(root, loaded, mpath.parent)
+    assert plan.links  # non-empty
+    # round-trip: every target stays under root (build_plan would have raised otherwise)
+    for link in plan.links:
+        assert str(link.target).startswith(str(root))
+
+
+def test_init_placeholder_manifest_is_still_valid_for_build_plan(tmp_path: Path):
+    from ssoty.init import build_init_manifest, render_manifest
+    from ssoty.sync import build_plan, load_manifest
+
+    root = _init_home_copies(tmp_path)
+    manifest = build_init_manifest(root, resolve_all(root))
+    mpath = root / "ssoty.json"
+    mpath.write_text(render_manifest(manifest), encoding="utf-8")
+    # build_plan must ignore the unknown "_comment" key and not raise.
+    plan = build_plan(root, load_manifest(mpath), mpath.parent)
+    assert plan is not None  # placeholder dir absent -> zero links, but a valid plan
+
+
+def test_init_cursor_mdc_pattern_preserved(tmp_path: Path):
+    from ssoty.init import build_init_manifest
+
+    root = tmp_path / "home"
+    canon = root / "agent-rules" / "common"
+    canon.mkdir(parents=True)
+    (canon / "x.mdc").write_text("---\nalwaysApply: true\n---\nsynthetic", encoding="utf-8")
+    cur = root / ".cursor" / "rules"
+    cur.mkdir(parents=True)
+    (cur / "x.mdc").symlink_to(canon / "x.mdc")
+    manifest = build_init_manifest(root, resolve_all(root))
+    # cursor's *.mdc pattern is carried on its own sources entry (not silently dropped to *.md)
+    assert manifest["harnesses"]["cursor"]["sources"] == [{"dir": "agent-rules/common", "pattern": "*.mdc"}]
+
+
+def test_init_preview_writes_nothing(tmp_path: Path, capsys):
+    # (e) preview (default) writes nothing, creates no ssoty.json.
+    root = _init_home_symlinked(tmp_path)
+    assert main(["init", str(root)]) == 0
+    out = capsys.readouterr().out
+    assert "PREVIEW" in out
+    assert "claude-code" in out
+    assert not (root / "ssoty.json").exists()
+
+
+def test_init_apply_writes_manifest(tmp_path: Path, capsys):
+    root = _init_home_symlinked(tmp_path)
+    assert main(["init", str(root), "--apply"]) == 0
+    out = capsys.readouterr().out
+    mpath = root / "ssoty.json"
+    assert mpath.exists()
+    assert f"wrote {mpath}" in out
+    # written content is the same valid JSON, parseable
+    data = json.loads(mpath.read_text(encoding="utf-8"))
+    assert data["method"] == "symlink"
+    assert set(data["harnesses"]) == {"claude-code", "codex", "gemini"}
+
+
+def test_init_apply_refuses_overwrite_without_force(tmp_path: Path, capsys):
+    # (f) --apply on an existing ssoty.json returns 2 and leaves bytes unchanged.
+    root = _init_home_symlinked(tmp_path)
+    mpath = root / "ssoty.json"
+    mpath.write_text("PRE-EXISTING DO NOT CLOBBER", encoding="utf-8")
+    before = mpath.read_bytes()
+    rc = main(["init", str(root), "--apply"])
+    assert rc == 2
+    assert mpath.read_bytes() == before  # untouched
+
+
+def test_init_apply_force_overwrites(tmp_path: Path, capsys):
+    root = _init_home_symlinked(tmp_path)
+    mpath = root / "ssoty.json"
+    mpath.write_text("PRE-EXISTING", encoding="utf-8")
+    assert main(["init", str(root), "--apply", "--force"]) == 0
+    data = json.loads(mpath.read_text(encoding="utf-8"))
+    assert data["version"] == "1"
+
+
+def test_init_no_harnesses_returns_zero(tmp_path: Path, capsys):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert main(["init", str(empty)]) == 0
+    out = capsys.readouterr().out
+    assert "no known harnesses found" in out
+    assert not (empty / "ssoty.json").exists()
+
+
+def test_init_redact_masks_home(tmp_path: Path, capsys, monkeypatch):
+    # --redact runs previewed text through redact (home path masking), consistent with other cmds.
+    root = _init_home_symlinked(tmp_path)
+    monkeypatch.setenv("HOME", str(root))
+    assert main(["init", str(root), "--redact"]) == 0
+    out = capsys.readouterr().out
+    # the absolute root path must not appear verbatim once redacted
+    assert str(root) not in out
+
+
+def test_init_deterministic_same_bytes(tmp_path: Path):
+    from ssoty.init import build_init_manifest, render_manifest
+
+    root = _init_home_symlinked(tmp_path)
+    first = render_manifest(build_init_manifest(root, resolve_all(root)))
+    second = render_manifest(build_init_manifest(root, resolve_all(root)))
+    assert first == second
+
+
+def test_init_tie_between_sibling_dirs_degrades_to_placeholder(tmp_path: Path):
+    # symlinks split 1:1 across agent-rules/common AND agent-rules/claude -> no clear majority.
+    # Modal-parent must NOT climb to the broad ancestor (agent-rules/, the old commonpath bug,
+    # which would sweep claude-only rules into the common source); with no majority it degrades
+    # to the placeholder so the user picks deliberately.
+    from ssoty.init import infer_common_source
+
+    root = tmp_path / "home"
+    ar = root / "agent-rules"
+    (ar / "common").mkdir(parents=True)
+    (ar / "claude").mkdir(parents=True)
+    (ar / "common" / "team-defaults.md").write_text("synthetic", encoding="utf-8")
+    (ar / "claude" / "claude-only.md").write_text("synthetic", encoding="utf-8")
+    cr = root / ".claude" / "rules"
+    cr.mkdir(parents=True)
+    (cr / "team-defaults.md").symlink_to(ar / "common" / "team-defaults.md")
+    (cr / "claude-only.md").symlink_to(ar / "claude" / "claude-only.md")
+    common_dir, uses = infer_common_source(root, resolve_all(root))
+    assert common_dir is None  # tie -> placeholder, NOT agent-rules
+    assert uses == set()
+
+
+def test_init_placeholder_when_commonpath_too_broad(tmp_path: Path):
+    # symlinks straddle root itself (root/a.md and root/sub/b.md) -> commonpath == root -> too
+    # broad -> placeholder (None).
+    from ssoty.init import infer_common_source
+
+    root = tmp_path / "home"
+    (root / "sub").mkdir(parents=True)
+    (root / "a.md").write_text("synthetic", encoding="utf-8")
+    (root / "sub" / "b.md").write_text("synthetic", encoding="utf-8")
+    cr = root / ".claude" / "rules"
+    cr.mkdir(parents=True)
+    (cr / "a.md").symlink_to(root / "a.md")
+    (cr / "b.md").symlink_to(root / "sub" / "b.md")
+    common_dir, uses = infer_common_source(root, resolve_all(root))
+    assert common_dir is None
+    assert uses == set()
+
+
+def test_init_to_manifest_path_variants(tmp_path: Path):
+    from ssoty.init import _to_manifest_path
+
+    root = tmp_path / "home"
+    root.mkdir()
+    rr = os.path.realpath(root)
+    home = os.path.realpath(os.path.expanduser("~"))
+    assert _to_manifest_path(root, rr) == "."
+    assert _to_manifest_path(root, rr + "/agent-rules/common") == "agent-rules/common"
+    assert _to_manifest_path(root, home) == "~"
+    assert _to_manifest_path(root, home + "/shared-rules").startswith("~/")
+    # an absolute dir under neither root nor home is emitted verbatim
+    assert _to_manifest_path(root, "/opt/rules") == "/opt/rules"
+
+
+def test_init_file_entry_with_root_source_dir(tmp_path: Path):
+    from ssoty.init import _file_entry
+    from ssoty.resolver import Source
+
+    src = Source("GEMINI.md", ALWAYS_ON)
+    # source_dir == "." -> the file source is the bare basename (no "./" prefix)
+    assert _file_entry(src, ".") == {"target": "GEMINI.md", "sources": [{"file": "GEMINI.md"}]}
