@@ -7,6 +7,7 @@ Usage:
     ssoty resolve [PATH] [--json] [--redact]
     ssoty fix     [PATH] [--apply] [--redact] [--scaffold-ignore]
     ssoty sync    [PATH] [--apply] [--method symlink] [--manifest PATH] [--redact]
+    ssoty init    [PATH] [--apply] [--force] [--redact]
 
 PATH is the root that contains ``.claude`` / ``.codex`` (defaults to $HOME).
 For fixtures, pass the fixture dir, e.g. ``ssoty audit examples/messy-setup``.
@@ -30,6 +31,7 @@ from ssoty.fix import (
     render_plan_text,
 )
 from ssoty.ignore import SsotyIgnore
+from ssoty.init import build_init_manifest, render_manifest
 from ssoty.metrics import HarnessTax, compute_context_tax
 from ssoty.models import AuditResult
 from ssoty.redact import redact
@@ -184,6 +186,51 @@ def cmd_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_init(args: argparse.Namespace) -> int:
+    root = _resolve_root(args.path)
+    redactor = _redactor(args.redact)
+    surfaces = resolve_all(root)
+    if not surfaces:
+        # Nothing to scaffold is not an error — just inform and exit 0.
+        print(
+            f"ssoty init: no known harnesses found under {root} "
+            "(looked for .claude/rules, CLAUDE.md, .codex/..., .cursor/rules, GEMINI.md, "
+            ".clinerules, .windsurf, .continue, copilot-instructions.md)."
+        )
+        return 0
+    manifest = build_init_manifest(root, surfaces)
+    text = render_manifest(manifest)
+    mpath = root / "ssoty.json"
+
+    detected = ", ".join(sorted(surfaces))
+    inferred = "_comment" not in manifest
+    source = manifest["common"]["sources"][0]["dir"]
+    where = "inferred" if inferred else "PLACEHOLDER"
+
+    if not args.apply:
+        # PREVIEW is the DEFAULT: print the proposed manifest, write/create nothing.
+        print(
+            redactor(
+                f"ssoty init (PREVIEW) — detected: {detected}; "
+                f"common source ({where}): {source}. Pass --apply to write {mpath}."
+            )
+        )
+        print(redactor(text))
+        return 0
+
+    if mpath.exists() and not args.force:
+        # Refuse to overwrite silently (same exit code as a sync ManifestError refusal).
+        print(
+            f"ssoty init: {mpath} already exists; pass --force to overwrite",
+            file=sys.stderr,
+        )
+        return 2
+    mpath.write_text(text, encoding="utf-8")
+    print(f"ssoty init: wrote {mpath}")
+    print(f"next: ssoty sync --manifest {mpath}  (preview) then --apply, then ssoty audit")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ssoty", description="Static cross-harness rule coherence auditor.")
     parser.add_argument("--version", action="version", version=f"ssoty {__version__}")
@@ -247,6 +294,15 @@ def _build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--manifest", help="manifest path (default: ssoty.json in PATH)")
     sync.add_argument("--redact", action="store_true", help="mask home paths and emails")
     sync.set_defaults(func=cmd_sync)
+
+    init = sub.add_parser(
+        "init", help="detect present harnesses and scaffold a starter ssoty.json (PREVIEW by default)"
+    )
+    init.add_argument("path", nargs="?", help="root containing .claude/.codex (default: $HOME)")
+    init.add_argument("--apply", action="store_true", help="write ssoty.json (default: preview, writes nothing)")
+    init.add_argument("--force", action="store_true", help="overwrite an existing ssoty.json (with --apply)")
+    init.add_argument("--redact", action="store_true", help="mask home paths and emails")
+    init.set_defaults(func=cmd_init)
     return parser
 
 
