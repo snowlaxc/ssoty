@@ -162,6 +162,25 @@ and, with `--scaffold-ignore`, recording intentionally non-shared rule names in
 is idempotent (running it again does nothing). Add `.ssoty-backup/` to your gitignore so
 backups are never committed.
 
+### Init — scaffold a manifest (zero to `ssoty.json`)
+New to `sync`? `ssoty init` detects the harnesses already present at a root and writes a
+starter `ssoty.json` for you — the one-command on-ramp to `sync`:
+
+```bash
+ssoty init                      # PREVIEW: detect harnesses, print the proposed ssoty.json, write nothing
+ssoty init --apply              # write ./ssoty.json (refuses to overwrite an existing one)
+ssoty init --apply --force      # overwrite an existing ssoty.json
+ssoty init && ssoty sync        # scaffold, then preview the link plan
+```
+
+`init` **reuses the same detection as `audit`** (no second filesystem walk), so it scaffolds
+exactly the harnesses that resolve real rule docs. If your rules already symlink into a shared
+directory it infers that as the canonical `common` source (and marks each harness `"common": true`);
+otherwise it emits a safe **placeholder** common source with a `_comment` telling you to fill it in.
+It is **preview by default** (writes nothing), writes **only** `ssoty.json` (never a rule file), and
+**never overwrites** an existing manifest without `--force`. The emitted manifest round-trips straight
+into `sync`.
+
 ### Sync — from auditor to manager (dry-run + backup first)
 `ssoty audit` *tells you* harnesses diverged. `ssoty sync` *fixes the cause*: it
 distributes **one canonical rule source** as symlinks into every harness target, so all

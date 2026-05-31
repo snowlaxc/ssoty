@@ -5,6 +5,33 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](ht
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-05-30
+### Added
+- **New `ssoty init` command — zero-to-manifest scaffolding.** It detects the harnesses
+  actually present at a root and writes a starter `ssoty.json` so the on-ramp to `ssoty sync`
+  is one command. Detection **reuses the auditor's `resolve_all`** — no second filesystem
+  walk, identical real/fixture semantics — so the scaffolded harnesses are exactly the ones
+  that resolved real rule docs. Each present harness is mapped to a manifest entry: a directory
+  source (`.claude/rules`, `.cursor/rules`, …) becomes a directory `target`, and a single-file
+  source (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, …) becomes a single-file `target` with one
+  `{"file": …}` source — matching `sync`'s dir-vs-file target semantics so the manifest
+  round-trips back through `sync` against the same root.
+- **Canonical common-source inference (read-only).** `init` reads the `is_symlink` /
+  `symlink_target` metadata `resolve_all` already attached to each doc (no extra stat/readlink):
+  if a harness's rules symlink into a shared dir, that dir is emitted as `common.sources` and
+  the harness gets `"common": true`. When symlinks straddle sibling dirs it falls back to
+  `os.path.commonpath`, with a HOME/root floor that degrades to a safe **PLACEHOLDER** (plus a
+  guiding `_comment`) rather than emitting a too-broad source. With no symlinks at all (real
+  copies), the placeholder skeleton is emitted. Each harness's own glob pattern is preserved
+  (Cursor's `*.mdc` is not silently rewritten to `*.md`).
+- **Hard safety, mirroring `fix`/`sync`.** `ssoty init` is **PREVIEW by default** — it prints
+  the proposed manifest and writes nothing. Only `--apply` writes `root/ssoty.json`; an existing
+  manifest is **never overwritten without `--force`** (refusal exits 2, leaving the file
+  byte-identical). `init` writes ONLY the manifest — it never creates, links, moves, or deletes
+  any rule file (detection and inference are strictly read-only). `--redact` masks home paths
+  and emails, consistent with the other subcommands. Deterministic, offline, stdlib-only;
+  `dependencies` stays `[]`.
+
 ## [0.2.0] — 2026-05-30
 ### Added
 - **New `ssoty sync` command — from auditor to manager.** Where the read-only commands
