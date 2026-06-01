@@ -233,12 +233,25 @@ It **builds the canonical source that `init` infers and `sync` distributes**, tu
 "copies everywhere" setup into a single SSOT in one command.
 
 ```bash
-ssoty adopt                       # PREVIEW: classify + print the proposed canonical tree, write nothing
+ssoty adopt                       # INTERACTIVE TUI (on a terminal): classify rules, then 'a' to apply
+ssoty adopt --plan                # non-interactive TEXT preview (for CI/pipes): classify, write nothing
+ssoty adopt --no-tui              # force the text path even on a terminal
 ssoty adopt --apply               # move/copy rules into agent-rules/, symlink originals, back up first
 ssoty adopt --apply --no-symlink-originals   # just move/copy; leave originals as real files
 ssoty adopt --canonical-dir my-rules --apply # custom canonical root (validated under PATH)
 ssoty adopt --apply && ssoty init && ssoty sync   # the full lifecycle
 ```
+
+On a real terminal, `adopt` is now **interactive by default**: a two-pane TUI lists every
+classified rule on the left and its content preview + a classify chooser on the right. Toggle a
+rule to `common/` (all harnesses) or to a single `<harness>/` — `common` and the per-harness picks
+are mutually exclusive — then press `a` to apply or `q` to quit. **DIVERGENT** rules cannot be set
+to `common` (no chooser is shown — resolve them manually and re-run). The TUI performs **no**
+filesystem mutation of its own: pressing `a` rebuilds the plan from your choices and calls the
+exact same deterministic engine the text path uses (same move/backup/symlink, same `--force`
+guard). The interactive front-end is powered by [Textual](https://textual.textualize.io/) (a core
+dependency); the engine itself stays pure stdlib. When stdin/stdout are not both TTYs (CI, pipes),
+or with `--apply`/`--plan`/`--no-tui`, `adopt` automatically uses the non-interactive text path.
 
 `adopt` reuses the **exact content-identity grouping** the auditor's `content_divergence` check
 uses — it buckets each name by `(realpath, normalized content)`, so an already-symlinked SSOT
