@@ -5,6 +5,31 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](ht
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-06-01
+### Added
+- **`ssoty adopt` is now interactive by default — a Textual TUI.** On a real terminal, `adopt`
+  launches a two-pane classifier: every classified rule on the left (with a kind badge), its
+  content preview + a classify chooser on the right. Toggle a rule into the canonical `common/`
+  (all harnesses) or into a single `<harness>/` — `common` and the per-harness picks are
+  **mutually exclusive** — then press `a` to apply or `q` to quit. **DIVERGENT** rules show no
+  chooser and cannot be forced to `common` (resolve them manually and re-run), exactly mirroring
+  the engine's hard invariant.
+- **The TUI reuses the deterministic engine verbatim — zero new file-mutation code.** Pressing
+  `a` rebuilds an `AdoptPlan` from the user's choices and calls the SAME `adopt_needs_force` /
+  `apply_adopt_plan` the text path calls (same backup-first move/symlink, same `--force` guard).
+  All safety invariants (backups before mutation, root containment, idempotence, divergence never
+  auto-merged) are inherited, not re-implemented.
+- **New `--plan` and `--no-tui` flags.** `--plan` forces the non-interactive text preview (for CI
+  and pipes); `--no-tui` disables the TUI even on a terminal. `adopt` also auto-falls back to the
+  text path whenever stdin/stdout are not both TTYs, or when `--apply` is given (explicit
+  non-interactive intent). The previous text preview / `--apply` behavior is unchanged on that path.
+
+### Changed
+- **`textual>=0.27.0` is now a core dependency** (the floor that introduced `SelectionList`). It
+  powers ONLY the `adopt` TUI and is imported **lazily** inside `ssoty.tui` — `audit`, `diff`,
+  `sync`, `resolve`, `fix`, and `metrics` never pay its import cost, and the core engine
+  (`resolver`/`checks`/`adopt`/`sync`/…) stays pure stdlib, deterministic, and offline.
+
 ## [0.4.0] — 2026-05-31
 ### Added
 - **New `ssoty adopt` command — bootstrap a canonical SSOT from scattered copies.** Where
