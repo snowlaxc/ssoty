@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
+
+import pytest
 
 from ssoty.checks import CheckContext, run_checks
 from ssoty.cli import build, main
@@ -1980,6 +1983,257 @@ def test_adopt_already_shared_proposes_no_move(tmp_path: Path):
     plan = build_adopt_plan(root, resolve_all(root))
     by_name = {r.name: r for r in plan.rules}
     assert by_name["s.md"].kind == ALREADY_SHARED
+
+
+# --- adopt TUI: interactive classifier over the deterministic engine ---
+# The TUI performs NO filesystem mutation of its own: it rebuilds an AdoptPlan from user
+# overrides and calls the SAME engine (adopt_needs_force / apply_adopt_plan) cmd_adopt calls.
+# Every test runs against a tmp_path sandbox; the TUI is NEVER run against a real config.
+
+pytest.importorskip("textual")  # skip the whole TUI block if textual is unavailable
+
+
+def test_tui_lazy_import_keeps_text_commands_textual_free():
+    # audit/diff/sync/resolve/fix/metrics must not pull in textual: cli + adopt import clean.
+    import importlib
+
+    for mod in ("ssoty.cli", "ssoty.adopt"):
+        importlib.import_module(mod)
+    # cli importing adopt must NOT have imported textual transitively.
+    # A fresh subprocess proves it definitively (no test-session pollution).
+    import subprocess
+
+    import ssoty.cli  # noqa: F401
+
+    code = "import sys, ssoty.cli, ssoty.adopt; " "print('textual' in sys.modules)"
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout.strip()
+    assert out == "False"
+
+
+def _tui_plan(tmp_path: Path):
+    from ssoty.adopt import build_adopt_plan
+
+    root = _adopt_home(tmp_path)
+    return build_adopt_plan(root, resolve_all(root)), root
+
+
+def _rule_index(app, name: str) -> int:
+    return [r.name for r in app._rules].index(name)
+
+
+async def test_tui_renders_rule_list(tmp_path: Path):
+    from ssoty.tui import AdoptTUI
+
+    plan, _ = _tui_plan(tmp_path)
+    app = AdoptTUI(plan)
+    async with app.run_test(size=(120, 40)):
+        assert len(app.query("#rule-list ListItem")) == len(plan.rules)
+
+
+async def test_tui_preview_updates_on_navigation(tmp_path: Path):
+    from ssoty.tui import AdoptTUI
+
+    plan, _ = _tui_plan(tmp_path)
+    app = AdoptTUI(plan)
+    async with app.run_test(size=(120, 40)) as pilot:
+        # Highlight a known rule and confirm the preview reflects it.
+        idx = _rule_index(app, "shared.md")
+        app.query_one("#rule-list").index = idx
+        await pilot.pause()
+        assert "shared.md" in app._preview_str
+        assert "synthetic shared rule" in app._preview_str
+
+
+async def test_tui_classify_common_sets_override(tmp_path: Path):
+    from textual.widgets import SelectionList
+
+    from ssoty.tui import AdoptTUI
+
+    plan, _ = _tui_plan(tmp_path)
+    app = AdoptTUI(plan)
+    async with app.run_test(size=(120, 40)) as pilot:
+        # claude-only.md is HARNESS_SPECIFIC; force it to COMMON via the chooser.
+        app.query_one("#rule-list").index = _rule_index(app, "claude-only.md")
+        await pilot.pause()
+        sl = app.query_one("#classify-area SelectionList", SelectionList)
+        sl.select("common")
+        await pilot.pause()
+        assert app._overrides["claude-only.md"] == "common"
+
+
+async def test_tui_mutual_exclusion_common_clears_harness(tmp_path: Path):
+    from textual.widgets import SelectionList
+
+    from ssoty.tui import AdoptTUI
+
+    plan, _ = _tui_plan(tmp_path)
+    app = AdoptTUI(plan)
+    async with app.run_test(size=(120, 40)) as pilot:
+        # shared.md has both a common option and per-harness options.
+        app.query_one("#rule-list").index = _rule_index(app, "shared.md")
+        await pilot.pause()
+        sl = app.query_one("#classify-area SelectionList", SelectionList)
+        # Select a harness, then select common -> common wins, harness cleared.
+        sl.deselect_all()
+        await pilot.pause()
+        sl.select("claude-code")
+        await pilot.pause()
+        sl.select("common")
+        await pilot.pause()
+        assert "common" in sl.selected
+        assert "claude-code" not in sl.selected
+        assert app._overrides["shared.md"] == "common"
+
+
+async def test_tui_multi_select_two_harnesses(tmp_path: Path):
+    # A rule present in two harnesses can have BOTH harnesses selected (without common). The
+    # override records both; build_modified_rules keeps the engine's classification for the
+    # ambiguous multi-destination case (safe, no guess).
+    from textual.widgets import SelectionList
+
+    from ssoty.tui import AdoptTUI, build_modified_rules
+
+    plan, _ = _tui_plan(tmp_path)
+    app = AdoptTUI(plan)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.query_one("#rule-list").index = _rule_index(app, "shared.md")
+        await pilot.pause()
+        sl = app.query_one("#classify-area SelectionList", SelectionList)
+        sl.deselect_all()
+        await pilot.pause()
+        sl.select("claude-code")
+        await pilot.pause()
+        sl.select("continue")
+        await pilot.pause()
+        assert set(app._overrides["shared.md"]) == {"claude-code", "continue"}
+        assert "common" not in sl.selected
+        # Ambiguous multi-harness without common -> engine's original classification is kept.
+        modified = {r.name: r for r in build_modified_rules(plan, app._overrides)}
+        original = {r.name: r for r in plan.rules}
+        assert modified["shared.md"].kind == original["shared.md"].kind
+
+
+async def test_tui_divergent_cannot_be_set_common(tmp_path: Path):
+    from textual.widgets import SelectionList
+
+    from ssoty.adopt import DIVERGENT
+    from ssoty.tui import AdoptTUI, build_modified_rules
+
+    plan, _ = _tui_plan(tmp_path)
+    app = AdoptTUI(plan)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.query_one("#rule-list").index = _rule_index(app, "div.md")
+        await pilot.pause()
+        # No SelectionList is mounted for a DIVERGENT rule; a Static warning is shown instead.
+        assert len(app.query("#classify-area SelectionList")) == 0
+        assert "DIVERGENT" in app._chooser_message
+        # Even if a COMMON override is forced into the dict, the engine mapping ignores it.
+        app._overrides["div.md"] = "common"
+        modified = {r.name: r for r in build_modified_rules(plan, app._overrides)}
+        assert modified["div.md"].kind == DIVERGENT
+        assert modified["div.md"].canonical_rel == ""
+    # Sanity: no SelectionList type was usable on the divergent rule.
+    _ = SelectionList
+
+
+async def test_tui_choice_maps_to_engine_destinations(tmp_path: Path):
+    # The choice->engine mapping is exactly what apply WOULD move — asserted on the plan, no fs.
+    from ssoty.adopt import COMMON_CANDIDATE, HARNESS_SPECIFIC
+    from ssoty.tui import AdoptTUI, build_modified_rules
+
+    plan, _ = _tui_plan(tmp_path)
+    app = AdoptTUI(plan)
+    async with app.run_test(size=(120, 40)) as pilot:
+        # Force claude-only.md (HARNESS_SPECIFIC) -> COMMON.
+        app._overrides["claude-only.md"] = "common"
+        # Force shared.md (COMMON_CANDIDATE) -> a single harness.
+        app._overrides["shared.md"] = ["claude-code"]
+        await pilot.pause()
+        modified = {r.name: r for r in build_modified_rules(plan, app._overrides)}
+        assert modified["claude-only.md"].kind == COMMON_CANDIDATE
+        assert modified["claude-only.md"].canonical_rel == "common/claude-only.md"
+        assert modified["shared.md"].kind == HARNESS_SPECIFIC
+        assert modified["shared.md"].canonical_rel == "claude-code/shared.md"
+        # source_path for the forced-harness rule is that harness's variant.
+        src = modified["shared.md"].source_path
+        assert src is not None and ".claude" in str(src)
+
+
+async def test_tui_apply_calls_engine_and_moves_files(tmp_path: Path):
+    # Pressing 'a' runs the SAME engine cmd_adopt uses; files land at canonical destinations.
+    from ssoty.tui import AdoptTUI
+
+    plan, root = _tui_plan(tmp_path)
+    app = AdoptTUI(plan, force=False)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("a")
+        await pilot.pause()
+        assert app._apply_done is True
+    # Engine moved the common candidate into canonical and symlinked the originals.
+    canon_shared = root / "agent-rules" / "common" / "shared.md"
+    assert canon_shared.is_file() and not canon_shared.is_symlink()
+    assert (root / ".claude" / "rules" / "shared.md").is_symlink()
+    # DIVERGENT never auto-merged.
+    assert not (root / "agent-rules" / "common" / "div.md").exists()
+
+
+def test_tui_module_reuses_engine_not_reimplemented():
+    # Structural guard: tui.py must import the engine's mutation funcs, not define its own.
+    import ssoty.tui as tui
+
+    assert tui.apply_adopt_plan is __import__("ssoty.adopt", fromlist=["apply_adopt_plan"]).apply_adopt_plan
+    assert tui.adopt_needs_force is __import__("ssoty.adopt", fromlist=["adopt_needs_force"]).adopt_needs_force
+    src = (Path(tui.__file__)).read_text(encoding="utf-8")
+    # No bespoke move/symlink/backup logic in the TUI module.
+    assert "os.symlink" not in src
+    assert "shutil.copy" not in src
+    assert "shutil.move" not in src
+
+
+def test_cmd_adopt_non_tty_does_not_launch_tui_prints_text(tmp_path: Path, monkeypatch, capsys):
+    # Non-TTY (e.g. CI / piped) must NOT launch the TUI; it prints the text preview instead.
+    root = _adopt_home(tmp_path)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+
+    # If the TUI were launched, AdoptTUI.run would be called; make it explode to prove it isn't.
+    import ssoty.tui as tui
+
+    def _boom(*_a, **_k):
+        raise AssertionError("TUI must not launch in a non-TTY context")
+
+    monkeypatch.setattr(tui.AdoptTUI, "run", _boom)
+
+    assert main(["adopt", str(root)]) == 0
+    out = capsys.readouterr().out
+    assert "PREVIEW" in out
+    assert "UNRESOLVED DIVERGENCE" in out
+    # Nothing was written by the text preview path.
+    assert not (root / "agent-rules").exists()
+
+
+def test_cmd_adopt_no_tui_flag_forces_text_even_on_tty(tmp_path: Path, monkeypatch, capsys):
+    root = _adopt_home(tmp_path)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    import ssoty.tui as tui
+
+    monkeypatch.setattr(tui.AdoptTUI, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no TUI")))
+
+    assert main(["adopt", str(root), "--no-tui"]) == 0
+    assert "PREVIEW" in capsys.readouterr().out
+
+
+def test_cmd_adopt_plan_flag_forces_text_even_on_tty(tmp_path: Path, monkeypatch, capsys):
+    root = _adopt_home(tmp_path)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    import ssoty.tui as tui
+
+    monkeypatch.setattr(tui.AdoptTUI, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no TUI")))
+
+    assert main(["adopt", str(root), "--plan"]) == 0
+    assert "PREVIEW" in capsys.readouterr().out
 
 
 # --- add: place ONE new rule into the canonical SSOT ---

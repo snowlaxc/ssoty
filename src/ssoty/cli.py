@@ -8,7 +8,8 @@ Usage:
     ssoty fix     [PATH] [--apply] [--redact] [--scaffold-ignore]
     ssoty sync    [PATH] [--apply] [--method symlink] [--manifest PATH] [--redact]
     ssoty init    [PATH] [--apply] [--force] [--redact]
-    ssoty adopt   [PATH] [--apply] [--force] [--canonical-dir DIR] [--no-symlink-originals] [--redact]
+    ssoty adopt   [PATH] [--plan] [--no-tui] [--apply] [--force] [--canonical-dir DIR]
+                  [--no-symlink-originals] [--redact]
     ssoty add     RULE [PATH] [--common | --harness NAME] [--apply] [--force] [--manifest PATH] [--redact]
 
 PATH is the root that contains ``.claude`` / ``.codex`` (defaults to $HOME).
@@ -268,8 +269,27 @@ def cmd_adopt(args: argparse.Namespace) -> int:
         print(f"ssoty adopt: {redactor(str(exc))}", file=sys.stderr)
         return 2
 
+    # TTY gate: launch the interactive TUI only when BOTH stdin and stdout are real terminals,
+    # textual is importable, and no flag forces the non-interactive text path. --apply (explicit
+    # non-interactive intent), --plan (force text preview), and --no-tui all keep the text path.
+    use_tui = (
+        not getattr(args, "plan", False)
+        and not args.apply
+        and not getattr(args, "no_tui", False)
+        and sys.stdin.isatty()
+        and sys.stdout.isatty()
+    )
+    if use_tui:
+        try:
+            from ssoty.tui import AdoptTUI  # lazy import; never at module top
+        except ImportError:
+            use_tui = False  # textual missing -> graceful fallback to text
+    if use_tui:
+        AdoptTUI(plan, force=args.force).run()
+        return 0
+
     if not args.apply:
-        # PREVIEW is the DEFAULT: classify and print the proposed layout, write nothing.
+        # PREVIEW is the DEFAULT for the text path: classify, print the layout, write nothing.
         print(redactor(render_adopt_preview(plan, len(surfaces))))
         return 0
 
@@ -403,6 +423,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="classify scattered rule copies into a canonical SSOT layout (PREVIEW by default)",
     )
     adopt.add_argument("path", nargs="?", help="root containing .claude/.codex (default: $HOME)")
+    adopt.add_argument(
+        "--plan",
+        action="store_true",
+        help="force the non-interactive text preview (skip the TUI even on a terminal; for CI)",
+    )
+    adopt.add_argument(
+        "--no-tui",
+        action="store_true",
+        help="disable the interactive TUI regardless of TTY (text path only)",
+    )
     adopt.add_argument("--apply", action="store_true", help="perform the moves (default: preview, writes nothing)")
     adopt.add_argument("--force", action="store_true", help="overwrite a canonical dest that differs (with --apply)")
     adopt.add_argument(

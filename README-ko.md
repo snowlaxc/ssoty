@@ -199,12 +199,24 @@ Sync는 **`ssoty.json` manifest**(표준 라이브러리 JSON만 — 추가 의�
 **정규 소스를 만들어내는** 단계로, "복사본이 사방에 흩어진" 설정을 한 번에 단일 SSOT로 정리한다.
 
 ```bash
-ssoty adopt                       # PREVIEW: 분류 + 제안 정규 트리 출력, 아무것도 쓰지 않음
+ssoty adopt                       # 인터랙티브 TUI (터미널): 룰 분류 후 'a'로 적용
+ssoty adopt --plan                # 비인터랙티브 TEXT 미리보기 (CI/파이프용): 분류만, 쓰지 않음
+ssoty adopt --no-tui              # 터미널에서도 텍스트 경로 강제
 ssoty adopt --apply               # agent-rules/로 룰 이동/복사, 원본을 심볼릭 링크로 교체, 백업 우선
 ssoty adopt --apply --no-symlink-originals   # 이동/복사만; 원본은 실제 파일로 유지
 ssoty adopt --canonical-dir my-rules --apply # 커스텀 정규 루트 (PATH 하위로 검증)
 ssoty adopt --apply && ssoty init && ssoty sync   # 전체 라이프사이클
 ```
+
+실제 터미널에서 `adopt`는 이제 **기본적으로 인터랙티브**다: 두 패널 TUI가 왼쪽에 분류된 룰
+목록을, 오른쪽에 내용 미리보기 + 분류 선택기를 보여준다. 각 룰을 `common/`(모든 하네스) 또는 단일
+`<harness>/`로 토글하고(`common`과 하네스별 선택은 상호 배타적) `a`로 적용, `q`로 종료한다.
+**DIVERGENT** 룰은 `common`으로 설정할 수 없다(선택기가 표시되지 않음 — 수동 해소 후 재실행). TUI는
+자체적으로 파일을 **전혀 변경하지 않는다**: `a`를 누르면 선택을 바탕으로 plan을 재구성해 텍스트
+경로와 **완전히 동일한** 결정적 엔진(동일한 이동/백업/심볼릭, 동일한 `--force` 가드)을 호출한다.
+인터랙티브 프런트엔드는 [Textual](https://textual.textualize.io/)(코어 의존성)로 구동되며, 엔진
+자체는 순수 stdlib로 유지된다. stdin/stdout이 모두 TTY가 아니거나(CI, 파이프), `--apply`/`--plan`/
+`--no-tui`를 주면 `adopt`는 자동으로 비인터랙티브 텍스트 경로를 쓴다.
 
 `adopt`는 감사자의 `content_divergence` 체크와 **완전히 동일한 내용-동일성 그룹화**를 재사용한다 —
 각 이름을 `(realpath, 정규화된 내용)`으로 버킷팅하므로 이미 심볼릭 링크된 SSOT는 한 버킷으로 합쳐진다.
