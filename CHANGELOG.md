@@ -29,6 +29,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](ht
   the scan-root containment constraint (the configurable-home model) while `add` keeps its
   root-contained dest check.
 
+### Security
+- adopt **refuses** a canonical dir containing `..` segments and a canonical **home that is a
+  symlink** (would write through to the link target) — the configurable home may be absolute and
+  external, but cannot escape via `..` or a symlinked node.
+- `build_modified_rules` validates harness names against `scanned_harnesses`, so a hand-built
+  overrides dict cannot inject a path separator / `..` into `canonical_rel`.
+- copy-less harness assignment keeps **zero** variants, so `adopt --apply` never symlinks a
+  deselected harness's original into another harness's bucket (no cross-harness leak).
+- `config.save_home` writes atomically (tmp + `os.replace`); a persistence failure warns
+  instead of crashing.
+
 ## [0.5.0] — 2026-06-01
 ### Added
 - **`ssoty adopt` is now interactive by default — a Textual TUI.** On a real terminal, `adopt`

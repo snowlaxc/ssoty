@@ -1932,6 +1932,49 @@ def test_adopt_canonical_dir_outside_root_is_allowed(tmp_path: Path, capsys):
     assert (root / ".claude" / "rules" / "shared.md").is_symlink()
 
 
+def test_adopt_canonical_dir_dotdot_is_refused(tmp_path: Path, capsys):
+    # An ABSOLUTE external home is allowed, but a canonical dir that climbs out via ".." is
+    # refused (exit 2, nothing written) — dropping root-containment must not become a footgun.
+    root = _adopt_home(tmp_path)
+    rc = main(["adopt", str(root), "--apply", "--canonical-dir", "../../escape"])
+    assert rc == 2
+    assert not (tmp_path.parent / "escape").exists()
+
+
+def test_adopt_symlinked_home_is_refused(tmp_path: Path, capsys):
+    # A canonical home that is ITSELF a symlink is refused — writing rules through it would land
+    # them at the link target, outside the declared home.
+    root = _adopt_home(tmp_path)
+    target = tmp_path / "real-target"
+    target.mkdir()
+    home_link = tmp_path / "home-link"
+    home_link.symlink_to(target)
+    rc = main(["adopt", str(root), "--apply", "--canonical-dir", str(home_link)])
+    assert rc == 2
+    assert not (target / "common").exists()
+
+
+def test_adopt_copy_less_apply_no_cross_harness_symlink(tmp_path: Path):
+    # Assigning a codex-only rule to claude-code (copy-less) must NOT, on apply, turn the codex
+    # original into a symlink pointing at the claude-code bucket (mutual-exclusion leak).
+    from ssoty.adopt import apply_adopt_plan, build_adopt_plan
+    from ssoty.tui import build_modified_plan
+
+    root = tmp_path / "home"
+    refs = root / ".codex" / "skills" / "global-agent-rules" / "references"
+    cr = root / ".claude" / "rules"
+    refs.mkdir(parents=True)
+    cr.mkdir(parents=True)
+    (refs / "preservation.md").write_text("codex only\n", encoding="utf-8")
+    (cr / "anchor.md").write_text("claude\n", encoding="utf-8")
+    plan = build_adopt_plan(root, resolve_all(root), canonical_dir=str(root / "agent-rules"))
+    modified = build_modified_plan(plan, {"preservation.md": ["claude-code"]})
+    apply_adopt_plan(modified)
+    assert (root / "agent-rules" / "claude-code" / "preservation.md").is_file()
+    codex_orig = refs / "preservation.md"
+    assert codex_orig.is_file() and not codex_orig.is_symlink()  # untouched, no cross-harness link
+
+
 def test_adopt_apply_no_crash_when_original_is_already_symlink(tmp_path: Path):
     # Regression: a harness-specific rule whose source IS the original (same path) was backed
     # up twice in one run; once it had become a symlink the second _backup_node hit
@@ -2412,6 +2455,22 @@ def test_config_corrupt_file_degrades_to_default(tmp_path: Path, monkeypatch):
     assert config.resolve_home(None) == Path(os.path.normpath(str(tmp_path / "h" / ".ssoty")))
 
 
+def test_cli_home_persist_failure_is_graceful(tmp_path: Path, monkeypatch, capsys):
+    from ssoty import config
+
+    monkeypatch.setenv("HOME", str(tmp_path / "h"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    root = _adopt_home(tmp_path)
+    # Make config.json a DIRECTORY so the atomic replace in save_home fails — the command must
+    # warn and continue, not crash.
+    cp = config.config_path()
+    cp.parent.mkdir(parents=True)
+    cp.mkdir()
+    rc = main(["--home", str(tmp_path / "myhome"), "adopt", str(root), "--canonical-dir", str(root / "agent-rules")])
+    assert rc == 0  # preview path, did not crash despite the persist failure
+    assert "could not persist" in capsys.readouterr().err
+
+
 def test_cli_home_flag_persists_and_is_reused(tmp_path: Path, monkeypatch):
     from ssoty import config
 
@@ -2453,16 +2512,35 @@ def test_build_modified_rules_assigns_copy_less_harness(tmp_path: Path):
 
     root = tmp_path / "home"
     refs = root / ".codex" / "skills" / "global-agent-rules" / "references"
+    cr = root / ".claude" / "rules"
     refs.mkdir(parents=True)
+    cr.mkdir(parents=True)
     (refs / "preservation.md").write_text("codex only\n", encoding="utf-8")
+    (cr / "anchor.md").write_text("claude anchor\n", encoding="utf-8")  # makes claude-code a scanned harness
     plan = build_adopt_plan(root, resolve_all(root))
     by = {r.name: r for r in plan.rules}
     assert by["preservation.md"].kind == HARNESS_SPECIFIC  # codex-only
-    # claude-code has NO copy, yet the user can still assign the rule to it.
+    # claude-code is scanned but has NO copy of preservation.md — the user can still assign it.
     modified = {r.name: r for r in build_modified_rules(plan, {"preservation.md": ["claude-code"]})}
     pres = modified["preservation.md"]
     assert pres.canonical_rel == "claude-code/preservation.md"
     assert pres.source_path is not None  # bytes come from the only (codex) copy
+    # Copy-less target keeps ZERO variants -> adopt --apply will NOT symlink the codex original
+    # into the claude-code bucket (no cross-harness leak; distribution is a later sync's job).
+    assert pres.variants == ()
+
+
+def test_build_modified_rules_rejects_injected_harness_name(tmp_path: Path):
+    from ssoty.adopt import build_adopt_plan
+    from ssoty.tui import build_modified_rules
+
+    root = _adopt_home(tmp_path)
+    plan = build_adopt_plan(root, resolve_all(root))
+    # A hand-built overrides dict with a traversal harness name must NOT produce an escaping
+    # canonical_rel — an unscanned/garbage harness is ignored and the engine's classification kept.
+    by = {r.name: r for r in build_modified_rules(plan, {"claude-only.md": ["../../etc/evil"]})}
+    assert ".." not in by["claude-only.md"].canonical_rel
+    assert by["claude-only.md"].canonical_rel == "claude-code/claude-only.md"  # engine default kept
 
 
 def test_build_modified_rules_all_harnesses_collapse_to_common(tmp_path: Path):

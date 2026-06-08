@@ -475,7 +475,12 @@ def main(argv: list[str] | None = None) -> int:
     explicit_home = getattr(args, "home", None)
     home = config.resolve_home(explicit_home)
     if explicit_home:
-        config.save_home(home)
+        try:
+            config.save_home(home)
+        except OSError as exc:
+            # Persistence is best-effort: a write failure (e.g. unwritable config dir) must not
+            # crash the command — the resolved home is still used for this run.
+            print(f"ssoty: warning: could not persist --home ({exc})", file=sys.stderr)
     args.home = home
     return args.func(args)
 

@@ -89,5 +89,10 @@ def save_home(home: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     data = _load_config()
     data[_HOME_KEY] = str(home)
-    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    # Atomic write (tmp + os.replace) to match the engine's deterministic/idempotent contract:
+    # a crash mid-write never leaves a half-written config. OSError (e.g. config.json exists as
+    # a directory, or a read-only dir) propagates to the caller, which degrades gracefully.
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
     return path

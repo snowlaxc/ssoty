@@ -97,16 +97,25 @@ def _as_harness(rule: ProposedRule, harness: str) -> ProposedRule:
     """Re-bucket ``rule`` into ``<harness>/<name>``.
 
     The harness need NOT already have a copy of the rule: a codex-only rule can be assigned
-    to ``claude-code`` even though claude has no copy. The canonical bytes come from the
-    rule's representative variant; physical distribution to a copy-less harness is the
-    manifest + a later ``ssoty sync``'s job, not adopt's move.
+    to ``claude-code`` even though claude has no copy.
+
+    Variants are pruned to the TARGET harness only. If the target already has a copy, we relink
+    just that harness's original and leave other harnesses' copies untouched. If the target is
+    copy-less, we keep ZERO variants — the canonical bytes come from the representative variant,
+    but no original is relinked here (that would wrongly symlink a deselected harness's file into
+    this dest; physical distribution to a copy-less harness is a later ``ssoty sync``'s job).
     """
-    src = _variant_path_for_harness(rule, harness) or _representative_path_for_common(rule)
+    src = _variant_path_for_harness(rule, harness)
+    if src is not None:
+        variants = tuple(v for v in rule.variants if v.harness == harness)
+    else:
+        variants = ()
+        src = _representative_path_for_common(rule)
     return ProposedRule(
         name=rule.name,
         kind=HARNESS_SPECIFIC,
         canonical_rel=f"{harness}/{rule.name}",
-        variants=rule.variants,
+        variants=variants,
         source_path=src,
     )
 
@@ -125,6 +134,7 @@ def build_modified_rules(plan: AdoptPlan, overrides: dict[str, object]) -> tuple
                                       precise subset distribution is left to the manifest).
       * ``[]`` (empty)             -> keep the engine's classification.
     """
+    valid = set(plan.scanned_harnesses)
     out: list[ProposedRule] = []
     for rule in plan.rules:
         override = overrides.get(rule.name)
@@ -135,9 +145,12 @@ def build_modified_rules(plan: AdoptPlan, overrides: dict[str, object]) -> tuple
             out.append(_as_common(rule))
             continue
         if isinstance(override, list):
-            harnesses = [h for h in override if isinstance(h, str)]
+            # Accept ONLY actually-scanned harness names. This defends the public API against an
+            # override that injects a path separator or ".." into canonical_rel (the TUI already
+            # constrains picks to scanned_harnesses; a hand-built overrides dict would not).
+            harnesses = [h for h in override if isinstance(h, str) and h in valid]
             if not harnesses:
-                out.append(rule)  # nothing selected -> keep engine's
+                out.append(rule)  # nothing valid selected -> keep engine's
             elif len(harnesses) == 1:
                 out.append(_as_harness(rule, harnesses[0]))
             else:

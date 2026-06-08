@@ -231,10 +231,22 @@ def _resolve_canonical_dir(root: Path, canonical_dir: str | None) -> tuple[Path,
         # that "common/<name>" and "<harness>/<name>" land at "agent-rules/common/..." and
         # "agent-rules/<harness>/..." respectively — the layout init/sync compose with.
         chosen = str(Path(PLACEHOLDER_DIR).parent)  # "agent-rules"
-    p = Path(os.path.expanduser(chosen))
+    expanded = os.path.expanduser(chosen)
+    # Allow an ABSOLUTE external home, but never a ".." that climbs out: dropping the
+    # scan-root containment guard must not become a ".."-traversal footgun (a relative
+    # "--canonical-dir ../x" or an absolute "/a/../b" both escape via "..").
+    if ".." in Path(expanded).parts:
+        raise ManifestError(f"adopt: canonical home must not contain '..' segments: {chosen}")
+    p = Path(expanded)
     if not p.is_absolute():
         p = root_abs / p
     p = Path(os.path.normpath(str(p)))
+    # Refuse a home that is itself a symlink: writing rules through it would land them at the
+    # link's target, outside the declared home. (First run creates a real dir; this only trips
+    # if the home node already exists as a symlink — explicit --home, the ~/.ssoty default, or
+    # a persisted config value alike.)
+    if p.is_symlink():
+        raise ManifestError(f"adopt: canonical home is a symlink (refusing to write through it): {p}")
     try:
         rel = str(p.relative_to(root_abs))
     except ValueError:

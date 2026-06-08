@@ -276,10 +276,11 @@ and a short content fingerprint per variant is printed so you resolve the confli
 (`CLAUDE.md`/`AGENTS.md`/`GEMINI.md`/…) are excluded from consolidation — each harness owns its own
 copy by design — and left in place. Hard safety mirrors `fix`/`sync`: **preview by default**;
 `--apply` backs up every moved/replaced node into `.ssoty-backup/<timestamp>/` *before* any
-mutation; the canonical home is a trusted location so it may sit outside the scan root, and
-engine-generated destinations under it (`common/<name>` / `<harness>/<name>`) contain no `..` so
-nothing escapes the home; idempotent (a re-run skips already-symlinked originals and
-identical-content writes); `--force` is required only to overwrite a canonical dest that differs.
+mutation; the canonical home may sit outside the scan root, but adopt **refuses a `..`-containing
+canonical dir and a symlinked home**, and engine-generated destinations under it
+(`common/<name>` / `<harness>/<name>`) contain no `..`, so nothing escapes the home; idempotent
+(a re-run skips already-symlinked originals and identical-content writes); `--force` is required
+only to overwrite a canonical dest that differs.
 
 ### Add — place ONE new rule into the canonical SSOT
 Once you have a canonical source, `ssoty add` drops a single new rule into the right place so it
