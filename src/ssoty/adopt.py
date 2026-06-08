@@ -25,8 +25,11 @@ Hard safety contract (mirrors ``fix`` / ``sync`` / ``init``):
     each harness owns its own copy by design — and recorded as a non-movable bucket.
   * Broken symlinks (resolver sets ``text=''``) are filtered before bucketing so an empty
     string never fabricates divergence.
-  * All destinations are validated under ``root`` via ``sync._require_under_root`` AND
-    ``sync._require_realpath_under_root`` — never write outside the declared root tree.
+  * The canonical home (where rules consolidate) is a TRUSTED, configurable location
+    (``--canonical-dir`` / ``ssoty --home`` / the ``~/.ssoty`` default) and may live OUTSIDE
+    the scan root by design. Engine-generated destinations under it (``common/<name>`` /
+    ``<harness>/<name>``) contain no ``..``, so nothing escapes the home. ``add`` still
+    validates its single dest under ``root`` via ``sync._require_*``.
   * Idempotent: a re-run is a no-op (originals already symlinked to canonical are skipped
     via ``sync._same_link``; identical-content writes are skipped via ``normalize_content``).
   * stdlib only (``os``/``shutil``/``pathlib``/``hashlib``/``datetime``); deterministic
@@ -106,6 +109,10 @@ class AdoptPlan:
     canonical_rel: str  # canonical_dir rendered relative to root (for display)
     symlink_originals: bool
     rules: tuple[ProposedRule, ...] = ()
+    # Every harness the scan found at this root (e.g. ("claude-code", "codex", ...)). This is
+    # the candidate set the TUI offers as assignment targets — a rule can be re-bucketed into
+    # ANY scanned harness, not only the ones it already has a copy in. Sorted, de-duplicated.
+    scanned_harnesses: tuple[str, ...] = ()
 
     def by_kind(self, kind: str) -> list[ProposedRule]:
         return [r for r in self.rules if r.kind == kind]
@@ -206,12 +213,15 @@ def _classify_name(name: str, entries: list[tuple[str, RuleDoc]], canonical_rel:
 
 
 def _resolve_canonical_dir(root: Path, canonical_dir: str | None) -> tuple[Path, str]:
-    """Resolve and validate the canonical root dir; return (absolute, relative-to-root).
+    """Resolve the canonical home dir; return (absolute, relative-to-root-for-display).
 
-    Defaults to ``<root>/agent-rules`` (the PARENT of ``init.PLACEHOLDER_DIR`` =
-    ``agent-rules/common``) so adopt's ``common/`` and ``<harness>/`` subdirs line up with
-    what ``init``/``sync`` expect. Validated with ``sync._require_under_root`` AND
-    ``sync._require_realpath_under_root`` so adopt never writes outside ``root``.
+    The canonical home is where adopt consolidates rules. It is a TRUSTED location — an
+    explicit ``--home``/``--canonical-dir`` or the ``~/.ssoty`` default — and is deliberately
+    NOT constrained to the scan root: the whole point of a configurable home is that it can
+    live outside the scanned ``$HOME`` (e.g. ``~/.ssoty`` while scanning ``$HOME``, or any
+    ``--home`` path). Destinations under it use engine-generated relative paths
+    (``common/<name>`` / ``<harness>/<name>``) that contain no ``..``, so nothing escapes the
+    home. A relative ``canonical_dir`` is still anchored at ``root`` for backward compat.
     """
     root_abs = Path(os.path.normpath(str(root)))
     if canonical_dir:
@@ -225,11 +235,11 @@ def _resolve_canonical_dir(root: Path, canonical_dir: str | None) -> tuple[Path,
     if not p.is_absolute():
         p = root_abs / p
     p = Path(os.path.normpath(str(p)))
-    _require_under_root(p, root_abs, "adopt")
-    _require_realpath_under_root(p, root_abs, "adopt")
     try:
         rel = str(p.relative_to(root_abs))
-    except ValueError:  # pragma: no cover - guarded by _require_under_root above
+    except ValueError:
+        # Home lives outside the scan root (the configurable-home case) — display the
+        # absolute path rather than a root-relative one.
         rel = str(p)
     return p, rel
 
@@ -280,6 +290,7 @@ def build_adopt_plan(
         canonical_rel=canon_rel,
         symlink_originals=symlink_originals,
         rules=tuple(rules),
+        scanned_harnesses=tuple(sorted(surfaces)),
     )
 
 

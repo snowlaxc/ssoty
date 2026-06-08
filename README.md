@@ -236,17 +236,29 @@ It **builds the canonical source that `init` infers and `sync` distributes**, tu
 ssoty adopt                       # INTERACTIVE TUI (on a terminal): classify rules, then 'a' to apply
 ssoty adopt --plan                # non-interactive TEXT preview (for CI/pipes): classify, write nothing
 ssoty adopt --no-tui              # force the text path even on a terminal
-ssoty adopt --apply               # move/copy rules into agent-rules/, symlink originals, back up first
+ssoty adopt --apply               # consolidate rules into the canonical home (~/.ssoty by default), symlink originals, back up first
+ssoty --home ~/my-rules adopt --apply        # use (and persist) a custom canonical home
 ssoty adopt --apply --no-symlink-originals   # just move/copy; leave originals as real files
-ssoty adopt --canonical-dir my-rules --apply # custom canonical root (validated under PATH)
+ssoty adopt --canonical-dir my-rules --apply # one-off canonical root override (not persisted)
 ssoty adopt --apply && ssoty init && ssoty sync   # the full lifecycle
 ```
+
+#### Canonical home (`~/.ssoty/`)
+`adopt` consolidates into a **canonical home** — `~/.ssoty/` by default. Set a different one
+with the global `ssoty --home <path>`; the choice is **persisted** to
+`${XDG_CONFIG_HOME:-~/.config}/ssoty/config.json` and reused by every later command (precedence:
+`--home` flag > saved config > the `~/.ssoty` default). The home is a trusted, user-chosen
+location and **may live outside the scanned `$HOME`**. A per-run `--canonical-dir` still overrides
+without persisting.
 
 On a real terminal, `adopt` is now **interactive by default**: a two-pane TUI lists every
 classified rule on the left and its content preview + a classify chooser on the right. Toggle a
 rule to `common/` (all harnesses) or to a single `<harness>/` — `common` and the per-harness picks
-are mutually exclusive — then press `a` to apply or `q` to quit. **DIVERGENT** rules cannot be set
-to `common` (no chooser is shown — resolve them manually and re-run). The TUI performs **no**
+are mutually exclusive — then press `a` to apply or `q` to quit. The chooser offers **every
+scanned harness as a target, not only the ones a rule already has a copy in**: a codex-only rule
+can be assigned to `claude-code` too (selecting 2+ harnesses consolidates it into one shared
+`common/<name>` copy). **DIVERGENT** rules cannot be set to `common` (no chooser is shown —
+resolve them manually and re-run). The TUI performs **no**
 filesystem mutation of its own: pressing `a` rebuilds the plan from your choices and calls the
 exact same deterministic engine the text path uses (same move/backup/symlink, same `--force`
 guard). The interactive front-end is powered by [Textual](https://textual.textualize.io/) (a core
@@ -264,8 +276,9 @@ and a short content fingerprint per variant is printed so you resolve the confli
 (`CLAUDE.md`/`AGENTS.md`/`GEMINI.md`/…) are excluded from consolidation — each harness owns its own
 copy by design — and left in place. Hard safety mirrors `fix`/`sync`: **preview by default**;
 `--apply` backs up every moved/replaced node into `.ssoty-backup/<timestamp>/` *before* any
-mutation; destinations are validated under the root (an escaping `--canonical-dir` is rejected,
-exit 2, before any write); idempotent (a re-run skips already-symlinked originals and
+mutation; the canonical home is a trusted location so it may sit outside the scan root, and
+engine-generated destinations under it (`common/<name>` / `<harness>/<name>`) contain no `..` so
+nothing escapes the home; idempotent (a re-run skips already-symlinked originals and
 identical-content writes); `--force` is required only to overwrite a canonical dest that differs.
 
 ### Add — place ONE new rule into the canonical SSOT

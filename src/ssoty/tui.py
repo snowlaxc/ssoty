@@ -82,12 +82,48 @@ def _variant_path_for_harness(rule: ProposedRule, harness: str) -> Path | None:
     return None
 
 
+def _as_common(rule: ProposedRule) -> ProposedRule:
+    """Re-bucket ``rule`` into a single shared ``common/<name>`` canonical copy."""
+    return ProposedRule(
+        name=rule.name,
+        kind=COMMON_CANDIDATE,
+        canonical_rel=f"common/{rule.name}",
+        variants=rule.variants,
+        source_path=_representative_path_for_common(rule),
+    )
+
+
+def _as_harness(rule: ProposedRule, harness: str) -> ProposedRule:
+    """Re-bucket ``rule`` into ``<harness>/<name>``.
+
+    The harness need NOT already have a copy of the rule: a codex-only rule can be assigned
+    to ``claude-code`` even though claude has no copy. The canonical bytes come from the
+    rule's representative variant; physical distribution to a copy-less harness is the
+    manifest + a later ``ssoty sync``'s job, not adopt's move.
+    """
+    src = _variant_path_for_harness(rule, harness) or _representative_path_for_common(rule)
+    return ProposedRule(
+        name=rule.name,
+        kind=HARNESS_SPECIFIC,
+        canonical_rel=f"{harness}/{rule.name}",
+        variants=rule.variants,
+        source_path=src,
+    )
+
+
 def build_modified_rules(plan: AdoptPlan, overrides: dict[str, object]) -> tuple[ProposedRule, ...]:
     """Translate user overrides into a new ``rules`` tuple (pure — no filesystem access).
 
     Exposed at module scope so headless tests can assert the choice->engine mapping without
     constructing an App. Rules without an override are returned unchanged. DIVERGENT and
     ENTRYPOINT rules are NEVER re-bucketed (a COMMON override on them is ignored).
+
+    Override shapes:
+      * ``"common"``               -> ``common/<name>`` (shared by all harnesses).
+      * ``[h]`` (single harness)   -> ``<harness>/<name>`` (copy-less targets allowed).
+      * ``[h1, h2, ...]`` (2+)     -> ``common/<name>`` (a single shared canonical copy;
+                                      precise subset distribution is left to the manifest).
+      * ``[]`` (empty)             -> keep the engine's classification.
     """
     out: list[ProposedRule] = []
     for rule in plan.rules:
@@ -96,35 +132,18 @@ def build_modified_rules(plan: AdoptPlan, overrides: dict[str, object]) -> tuple
             out.append(rule)
             continue
         if override == _OVERRIDE_COMMON:
-            out.append(
-                ProposedRule(
-                    name=rule.name,
-                    kind=COMMON_CANDIDATE,
-                    canonical_rel=f"common/{rule.name}",
-                    variants=rule.variants,
-                    source_path=_representative_path_for_common(rule),
-                )
-            )
+            out.append(_as_common(rule))
             continue
-        if isinstance(override, list) and len(override) == 1:
-            harness = override[0]
-            src = _variant_path_for_harness(rule, harness)
-            if src is None:
-                # The picked harness has no variant for this rule — ambiguous; keep engine's.
-                out.append(rule)
-                continue
-            out.append(
-                ProposedRule(
-                    name=rule.name,
-                    kind=HARNESS_SPECIFIC,
-                    canonical_rel=f"{harness}/{rule.name}",
-                    variants=rule.variants,
-                    source_path=src,
-                )
-            )
+        if isinstance(override, list):
+            harnesses = [h for h in override if isinstance(h, str)]
+            if not harnesses:
+                out.append(rule)  # nothing selected -> keep engine's
+            elif len(harnesses) == 1:
+                out.append(_as_harness(rule, harnesses[0]))
+            else:
+                # 2+ harnesses share the rule -> one canonical copy under common/.
+                out.append(_as_common(rule))
             continue
-        # >1 harness without COMMON is ambiguous (no single destination) — keep engine's
-        # classification rather than guess. The mutual-exclusion UI makes this rare.
         out.append(rule)
     return out
 
@@ -137,6 +156,7 @@ def build_modified_plan(plan: AdoptPlan, overrides: dict[str, object]) -> AdoptP
         canonical_rel=plan.canonical_rel,
         symlink_originals=plan.symlink_originals,
         rules=build_modified_rules(plan, overrides),
+        scanned_harnesses=plan.scanned_harnesses,
     )
 
 
@@ -299,7 +319,10 @@ if _TEXTUAL_AVAILABLE:
                     harness_overrides = {v.harness for v in rule.variants}
 
             options = [Selection("→ common/ (all harnesses)", _OVERRIDE_COMMON, common_selected)]
-            for h in _rule_harnesses(rule):
+            # Offer EVERY scanned harness as a target — not only the ones this rule already
+            # has a copy in — so a codex-only rule can be assigned to claude-code too. Harnesses
+            # the rule already lives in are pre-checked; the rest are selectable but unchecked.
+            for h in self._plan.scanned_harnesses:
                 options.append(Selection(f"→ {h}/", h, h in harness_overrides))
             # Seed the previous-selection snapshot so the FIRST toggle diffs against the
             # initial (seeded-from-engine) state, not an empty set.

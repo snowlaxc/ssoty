@@ -1851,7 +1851,7 @@ def test_adopt_preview_writes_nothing(tmp_path: Path, capsys):
 
 def test_adopt_apply_creates_canonical_and_symlinks_with_backup(tmp_path: Path, capsys):
     root = _adopt_home(tmp_path)
-    assert main(["adopt", str(root), "--apply"]) == 0
+    assert main(["adopt", str(root), "--apply", "--canonical-dir", str(root / "agent-rules")]) == 0
     out = capsys.readouterr().out
     assert "backup written to:" in out
 
@@ -1874,7 +1874,7 @@ def test_adopt_apply_creates_canonical_and_symlinks_with_backup(tmp_path: Path, 
 
 def test_adopt_divergent_is_flagged_not_merged_both_backed_up(tmp_path: Path, capsys):
     root = _adopt_home(tmp_path)
-    assert main(["adopt", str(root), "--apply"]) == 0
+    assert main(["adopt", str(root), "--apply", "--canonical-dir", str(root / "agent-rules")]) == 0
     out = capsys.readouterr().out
     assert "divergent rule(s) flagged and deferred" in out
     # NEVER writes a single common/div.md from a divergent set.
@@ -1893,11 +1893,12 @@ def test_adopt_divergent_is_flagged_not_merged_both_backed_up(tmp_path: Path, ca
 
 def test_adopt_apply_is_idempotent(tmp_path: Path, capsys):
     root = _adopt_home(tmp_path)
-    assert main(["adopt", str(root), "--apply"]) == 0
+    canon = ["--canonical-dir", str(root / "agent-rules")]
+    assert main(["adopt", str(root), "--apply", *canon]) == 0
     capsys.readouterr()
     # Second apply: no new moves. shared.md now collapses to ONE inode (already-shared),
     # claude-only.md original already symlinks to canonical (skipped via _same_link).
-    assert main(["adopt", str(root), "--apply"]) == 0
+    assert main(["adopt", str(root), "--apply", *canon]) == 0
     out = capsys.readouterr().out
     assert "already shared" in out
     assert "already linked" in out
@@ -1905,7 +1906,10 @@ def test_adopt_apply_is_idempotent(tmp_path: Path, capsys):
 
 def test_adopt_no_symlink_originals_leaves_real_files(tmp_path: Path, capsys):
     root = _adopt_home(tmp_path)
-    assert main(["adopt", str(root), "--apply", "--no-symlink-originals"]) == 0
+    assert (
+        main(["adopt", str(root), "--apply", "--no-symlink-originals", "--canonical-dir", str(root / "agent-rules")])
+        == 0
+    )
     capsys.readouterr()
     # Content is COPIED into canonical, but originals remain real files (not symlinks).
     assert (root / "agent-rules" / "common" / "shared.md").is_file()
@@ -1913,13 +1917,19 @@ def test_adopt_no_symlink_originals_leaves_real_files(tmp_path: Path, capsys):
     assert not (root / ".claude" / "rules" / "shared.md").is_symlink()
 
 
-def test_adopt_canonical_dir_escaping_root_is_refused(tmp_path: Path, capsys):
+def test_adopt_canonical_dir_outside_root_is_allowed(tmp_path: Path, capsys):
+    # Configurable-home model: the canonical home MAY live outside the scan root — that is the
+    # whole point of `--home` / `--canonical-dir`. adopt consolidates there instead of refusing.
+    # The home is a trusted location; engine-generated dests ("common/<name>") never escape it.
     root = _adopt_home(tmp_path)
-    outside = tmp_path / "outside"
+    outside = tmp_path / "outside-home"
     rc = main(["adopt", str(root), "--apply", "--canonical-dir", str(outside)])
-    assert rc == 2
-    assert not outside.exists()  # nothing written outside the declared root
+    assert rc == 0
+    # The shared rule consolidated into the EXTERNAL home, not under the scan root.
+    assert (outside / "common" / "shared.md").is_file()
     assert not (root / "agent-rules").exists()
+    # Originals under the scan root now symlink into the external home.
+    assert (root / ".claude" / "rules" / "shared.md").is_symlink()
 
 
 def test_adopt_apply_no_crash_when_original_is_already_symlink(tmp_path: Path):
@@ -1931,10 +1941,11 @@ def test_adopt_apply_no_crash_when_original_is_already_symlink(tmp_path: Path):
     cr = root / ".claude" / "rules"
     cr.mkdir(parents=True)
     (cr / "only.md").write_text("synthetic harness-only rule\n", encoding="utf-8")
-    assert main(["adopt", str(root), "--apply"]) == 0  # first adopt: moves + symlinks original
+    canon = ["--canonical-dir", str(root / "agent-rules")]
+    assert main(["adopt", str(root), "--apply", *canon]) == 0  # first adopt: moves + symlinks original
     assert (cr / "only.md").is_symlink()
     # second adopt --apply over the symlinked original must be a clean no-op, not a crash
-    assert main(["adopt", str(root), "--apply"]) == 0
+    assert main(["adopt", str(root), "--apply", *canon]) == 0
     canon = root / "agent-rules" / "claude-code" / "only.md"
     assert canon.is_file() and not canon.is_symlink()
     assert os.path.realpath(cr / "only.md") == os.path.realpath(canon)
@@ -2086,11 +2097,12 @@ async def test_tui_mutual_exclusion_common_clears_harness(tmp_path: Path):
 
 
 async def test_tui_multi_select_two_harnesses(tmp_path: Path):
-    # A rule present in two harnesses can have BOTH harnesses selected (without common). The
-    # override records both; build_modified_rules keeps the engine's classification for the
-    # ambiguous multi-destination case (safe, no guess).
+    # A rule can have 2+ harnesses selected (without common). Selecting 2+ harnesses means the
+    # rule is shared, so build_modified_rules consolidates it into ONE common/<name> canonical
+    # copy (precise subset distribution is left to the manifest).
     from textual.widgets import SelectionList
 
+    from ssoty.adopt import COMMON_CANDIDATE
     from ssoty.tui import AdoptTUI, build_modified_rules
 
     plan, _ = _tui_plan(tmp_path)
@@ -2107,10 +2119,10 @@ async def test_tui_multi_select_two_harnesses(tmp_path: Path):
         await pilot.pause()
         assert set(app._overrides["shared.md"]) == {"claude-code", "continue"}
         assert "common" not in sl.selected
-        # Ambiguous multi-harness without common -> engine's original classification is kept.
+        # 2+ harnesses selected -> a single shared canonical copy under common/.
         modified = {r.name: r for r in build_modified_rules(plan, app._overrides)}
-        original = {r.name: r for r in plan.rules}
-        assert modified["shared.md"].kind == original["shared.md"].kind
+        assert modified["shared.md"].kind == COMMON_CANDIDATE
+        assert modified["shared.md"].canonical_rel == "common/shared.md"
 
 
 async def test_tui_divergent_cannot_be_set_common(tmp_path: Path):
@@ -2359,3 +2371,136 @@ def test_add_never_writes_outside_root(tmp_path: Path, capsys):
     )
     assert main(["add", str(new_rule), str(root), "--common", "--apply"]) == 2
     assert not (tmp_path / "escape").exists()
+
+
+# --- configurable canonical home (~/.ssoty) + persistence + full-harness assignment ---
+
+
+def test_config_resolve_home_precedence(tmp_path: Path, monkeypatch):
+    from ssoty import config
+
+    monkeypatch.setenv("HOME", str(tmp_path / "h"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    # No flag, no config -> default ~/.ssoty under the (isolated) HOME.
+    assert config.resolve_home(None) == Path(os.path.normpath(str(tmp_path / "h" / ".ssoty")))
+    # A persisted config home is used when no flag is given.
+    config.save_home(Path(os.path.normpath(str(tmp_path / "stored"))))
+    assert config.resolve_home(None) == Path(os.path.normpath(str(tmp_path / "stored")))
+    # An explicit flag wins over the config file.
+    assert config.resolve_home(str(tmp_path / "flag")) == Path(os.path.normpath(str(tmp_path / "flag")))
+
+
+def test_config_save_home_roundtrip(tmp_path: Path, monkeypatch):
+    from ssoty import config
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    home = Path(os.path.normpath(str(tmp_path / "myhome")))
+    cfgp = config.save_home(home)
+    assert cfgp == config.config_path()
+    assert json.loads(cfgp.read_text(encoding="utf-8"))["home"] == str(home)
+
+
+def test_config_corrupt_file_degrades_to_default(tmp_path: Path, monkeypatch):
+    from ssoty import config
+
+    monkeypatch.setenv("HOME", str(tmp_path / "h"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    cfgp = config.config_path()
+    cfgp.parent.mkdir(parents=True)
+    cfgp.write_text("{ not json", encoding="utf-8")
+    # A corrupt config must not crash resolution; it falls back to the default home.
+    assert config.resolve_home(None) == Path(os.path.normpath(str(tmp_path / "h" / ".ssoty")))
+
+
+def test_cli_home_flag_persists_and_is_reused(tmp_path: Path, monkeypatch):
+    from ssoty import config
+
+    monkeypatch.setenv("HOME", str(tmp_path / "h"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    root = _adopt_home(tmp_path)
+    home = tmp_path / "ssoty-home"
+    # Passing --home both consolidates there AND persists the choice.
+    assert main(["--home", str(home), "adopt", str(root), "--apply"]) == 0
+    assert (home / "common" / "shared.md").is_file()
+    # A later no-flag resolution reuses the persisted home.
+    assert config.resolve_home(None) == Path(os.path.normpath(str(home)))
+
+
+def test_cmd_adopt_default_canonical_is_home(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "h"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    root = _adopt_home(tmp_path)
+    # No --home, no config -> canonical defaults to ~/.ssoty (the isolated HOME), NOT the old
+    # $HOME/agent-rules default.
+    assert main(["adopt", str(root), "--apply"]) == 0
+    assert (tmp_path / "h" / ".ssoty" / "common" / "shared.md").is_file()
+    assert not (root / "agent-rules").exists()
+
+
+def test_adopt_plan_carries_scanned_harnesses(tmp_path: Path):
+    from ssoty.adopt import build_adopt_plan
+
+    root = _adopt_home(tmp_path)
+    plan = build_adopt_plan(root, resolve_all(root))
+    assert "claude-code" in plan.scanned_harnesses
+    assert "continue" in plan.scanned_harnesses
+    assert plan.scanned_harnesses == tuple(sorted(plan.scanned_harnesses))
+
+
+def test_build_modified_rules_assigns_copy_less_harness(tmp_path: Path):
+    from ssoty.adopt import HARNESS_SPECIFIC, build_adopt_plan
+    from ssoty.tui import build_modified_rules
+
+    root = tmp_path / "home"
+    refs = root / ".codex" / "skills" / "global-agent-rules" / "references"
+    refs.mkdir(parents=True)
+    (refs / "preservation.md").write_text("codex only\n", encoding="utf-8")
+    plan = build_adopt_plan(root, resolve_all(root))
+    by = {r.name: r for r in plan.rules}
+    assert by["preservation.md"].kind == HARNESS_SPECIFIC  # codex-only
+    # claude-code has NO copy, yet the user can still assign the rule to it.
+    modified = {r.name: r for r in build_modified_rules(plan, {"preservation.md": ["claude-code"]})}
+    pres = modified["preservation.md"]
+    assert pres.canonical_rel == "claude-code/preservation.md"
+    assert pres.source_path is not None  # bytes come from the only (codex) copy
+
+
+def test_build_modified_rules_all_harnesses_collapse_to_common(tmp_path: Path):
+    from ssoty.adopt import build_adopt_plan
+    from ssoty.tui import build_modified_rules
+
+    root = _adopt_home(tmp_path)
+    plan = build_adopt_plan(root, resolve_all(root))
+    # claude-only.md is HARNESS_SPECIFIC(claude-code); selecting 2+ harnesses -> common/.
+    by = {r.name: r for r in build_modified_rules(plan, {"claude-only.md": ["claude-code", "continue"]})}
+    assert by["claude-only.md"].canonical_rel == "common/claude-only.md"
+
+
+async def test_tui_chooser_offers_copy_less_harness(tmp_path: Path):
+    # The chooser for a codex-only rule must OFFER claude-code (a scanned harness with no copy
+    # of this rule) as a selectable target — the previously-missing capability.
+    from textual.widgets import SelectionList
+
+    from ssoty.adopt import build_adopt_plan
+    from ssoty.tui import AdoptTUI
+
+    root = tmp_path / "home"
+    refs = root / ".codex" / "skills" / "global-agent-rules" / "references"
+    cr = root / ".claude" / "rules"
+    refs.mkdir(parents=True)
+    cr.mkdir(parents=True)
+    (refs / "preservation.md").write_text("codex only\n", encoding="utf-8")
+    (cr / "anchor.md").write_text("claude anchor\n", encoding="utf-8")  # makes claude-code a scanned harness
+    plan = build_adopt_plan(root, resolve_all(root))
+    app = AdoptTUI(plan)
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.query_one("#rule-list").index = _rule_index(app, "preservation.md")
+        await pilot.pause()
+        sl = app.query_one("#classify-area SelectionList", SelectionList)
+        # claude-code is selectable even though preservation.md has no claude copy.
+        sl.deselect_all()  # clear the codex seed
+        await pilot.pause()
+        sl.select("claude-code")
+        await pilot.pause()
+        assert "claude-code" in sl.selected
+        assert app._overrides["preservation.md"] == ["claude-code"]

@@ -5,6 +5,30 @@ Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](ht
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-06-08
+### Added
+- **Configurable canonical *home* (`~/.ssoty/` by default), persisted.** A new global
+  `ssoty --home <path>` sets where `adopt` consolidates rules; the choice is saved to
+  `${XDG_CONFIG_HOME:-~/.config}/ssoty/config.json` and reused by every later command.
+  Resolution precedence: `--home` flag > config file > the `~/.ssoty` default. `adopt`'s
+  default canonical is now this home instead of the old `$HOME/agent-rules`. (`--canonical-dir`
+  still overrides per-run.) New module `ssoty.config` (`config_path` / `resolve_home` /
+  `save_home`, stdlib only). A corrupt config degrades to the default rather than crashing.
+- **The canonical home may live OUTSIDE the scan root.** It is a trusted, user-chosen location,
+  so adopt no longer refuses a canonical dir outside the scanned `$HOME`. Engine-generated
+  destinations under it (`common/<name>` / `<harness>/<name>`) contain no `..`, so nothing
+  escapes the home.
+- **The adopt TUI now offers EVERY scanned harness as an assignment target** — not only the
+  harnesses a rule already has a copy in. A codex-only rule like `preservation.md` can be
+  assigned to `claude-code` even though claude has no copy of it (`AdoptPlan.scanned_harnesses`
+  carries the candidate set). Selecting 2+ harnesses consolidates the rule into a single shared
+  `common/<name>` copy; selecting one yields `<harness>/<name>`.
+
+### Changed
+- `ssoty.adopt`: `AdoptPlan` gains a `scanned_harnesses` field; canonical-dir resolution drops
+  the scan-root containment constraint (the configurable-home model) while `add` keeps its
+  root-contained dest check.
+
 ## [0.5.0] — 2026-06-01
 ### Added
 - **`ssoty adopt` is now interactive by default — a Textual TUI.** On a real terminal, `adopt`
