@@ -212,6 +212,27 @@ def _classify_name(name: str, entries: list[tuple[str, RuleDoc]], canonical_rel:
     return ProposedRule(name=name, kind=DIVERGENT, canonical_rel="", variants=variants)
 
 
+def _reject_symlink_escape(home: Path) -> None:
+    """Refuse a canonical home reachable only through a symlink.
+
+    Walks up to the nearest EXISTING ancestor of ``home``: if its realpath diverges from its
+    lexical (normalized) path, some path component is a symlink that would redirect writes
+    (``mkdir``/``copy2`` follow it) to the link's target, outside the declared home — even when
+    the home leaf itself is not a symlink. The not-yet-existing leaf is created by ``mkdir``
+    under the validated ancestor and is therefore never a symlink.
+    """
+    ancestor = home
+    while not ancestor.exists():
+        parent = ancestor.parent
+        if parent == ancestor:  # reached the filesystem root without finding an existing node
+            return
+        ancestor = parent
+    if Path(os.path.realpath(str(ancestor))) != Path(os.path.normpath(str(ancestor))):
+        raise ManifestError(
+            f"adopt: canonical home is reachable only through a symlink " f"(refusing to write through it): {home}"
+        )
+
+
 def _resolve_canonical_dir(root: Path, canonical_dir: str | None) -> tuple[Path, str]:
     """Resolve the canonical home dir; return (absolute, relative-to-root-for-display).
 
@@ -241,12 +262,12 @@ def _resolve_canonical_dir(root: Path, canonical_dir: str | None) -> tuple[Path,
     if not p.is_absolute():
         p = root_abs / p
     p = Path(os.path.normpath(str(p)))
-    # Refuse a home that is itself a symlink: writing rules through it would land them at the
-    # link's target, outside the declared home. (First run creates a real dir; this only trips
-    # if the home node already exists as a symlink — explicit --home, the ~/.ssoty default, or
-    # a persisted config value alike.)
-    if p.is_symlink():
-        raise ManifestError(f"adopt: canonical home is a symlink (refusing to write through it): {p}")
+    # Refuse a home reachable only THROUGH a symlink — not just a symlinked leaf, but a symlinked
+    # parent component too: mkdir/copy2 follow an intermediate symlink and would land rules at the
+    # link's target, outside the declared home. Checking only the leaf (p.is_symlink()) misses
+    # `root/linkparent/canon` where linkparent is the symlink. We validate the nearest EXISTING
+    # ancestor's realpath; the not-yet-existing leaf is created by mkdir under it (never a symlink).
+    _reject_symlink_escape(p)
     try:
         rel = str(p.relative_to(root_abs))
     except ValueError:

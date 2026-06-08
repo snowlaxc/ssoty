@@ -1954,6 +1954,20 @@ def test_adopt_symlinked_home_is_refused(tmp_path: Path, capsys):
     assert not (target / "common").exists()
 
 
+def test_adopt_symlinked_parent_component_is_refused(tmp_path: Path, capsys):
+    # Not just a symlinked leaf: a symlinked PARENT component must also be refused — mkdir/copy2
+    # would follow it and write at the link target even though the canonical leaf is not a symlink.
+    root = _adopt_home(tmp_path)
+    escape = tmp_path / "escape"
+    escape.mkdir()
+    linkparent = tmp_path / "linkparent"
+    linkparent.symlink_to(escape)
+    canonical = linkparent / "canon"  # leaf is NOT a symlink; its parent is
+    rc = main(["adopt", str(root), "--apply", "--canonical-dir", str(canonical)])
+    assert rc == 2
+    assert not (escape / "canon").exists()
+
+
 def test_adopt_copy_less_apply_no_cross_harness_symlink(tmp_path: Path):
     # Assigning a codex-only rule to claude-code (copy-less) must NOT, on apply, turn the codex
     # original into a symlink pointing at the claude-code bucket (mutual-exclusion leak).
