@@ -202,15 +202,25 @@ Sync는 **`ssoty.json` manifest**(표준 라이브러리 JSON만 — 추가 의�
 ssoty adopt                       # 인터랙티브 TUI (터미널): 룰 분류 후 'a'로 적용
 ssoty adopt --plan                # 비인터랙티브 TEXT 미리보기 (CI/파이프용): 분류만, 쓰지 않음
 ssoty adopt --no-tui              # 터미널에서도 텍스트 경로 강제
-ssoty adopt --apply               # agent-rules/로 룰 이동/복사, 원본을 심볼릭 링크로 교체, 백업 우선
+ssoty adopt --apply               # canonical home(기본 ~/.ssoty)으로 룰 통합, 원본을 심볼릭 링크로 교체, 백업 우선
+ssoty --home ~/my-rules adopt --apply        # 커스텀 canonical home 사용(+ 영속 저장)
 ssoty adopt --apply --no-symlink-originals   # 이동/복사만; 원본은 실제 파일로 유지
-ssoty adopt --canonical-dir my-rules --apply # 커스텀 정규 루트 (PATH 하위로 검증)
+ssoty adopt --canonical-dir my-rules --apply # 일회성 정규 루트 오버라이드 (영속되지 않음)
 ssoty adopt --apply && ssoty init && ssoty sync   # 전체 라이프사이클
 ```
 
+#### Canonical home (`~/.ssoty/`)
+`adopt`는 룰을 **canonical home** — 기본값 `~/.ssoty/` — 으로 통합한다. 글로벌 `ssoty --home <경로>`로
+다른 위치를 지정할 수 있고, 그 선택은 `${XDG_CONFIG_HOME:-~/.config}/ssoty/config.json`에 **영속 저장**되어
+이후 모든 명령이 재사용한다(우선순위: `--home` 플래그 > 저장된 config > `~/.ssoty` 기본). home은 사용자가
+지정한 신뢰된 위치이므로 **스캔 루트(`$HOME`) 밖에 있어도 된다**. 일회성 `--canonical-dir`은 영속 없이
+그 실행만 오버라이드한다.
+
 실제 터미널에서 `adopt`는 이제 **기본적으로 인터랙티브**다: 두 패널 TUI가 왼쪽에 분류된 룰
 목록을, 오른쪽에 내용 미리보기 + 분류 선택기를 보여준다. 각 룰을 `common/`(모든 하네스) 또는 단일
-`<harness>/`로 토글하고(`common`과 하네스별 선택은 상호 배타적) `a`로 적용, `q`로 종료한다.
+`<harness>/`로 토글하고(`common`과 하네스별 선택은 상호 배타적) `a`로 적용, `q`로 종료한다. 선택기는
+**룰이 이미 사본을 가진 하네스뿐 아니라 스캔된 모든 하네스를 타겟으로 제공**한다: codex 전용 룰도
+`claude-code`로 배정할 수 있다(2개 이상 하네스를 선택하면 단일 공유 `common/<name>`으로 통합).
 **DIVERGENT** 룰은 `common`으로 설정할 수 없다(선택기가 표시되지 않음 — 수동 해소 후 재실행). TUI는
 자체적으로 파일을 **전혀 변경하지 않는다**: `a`를 누르면 선택을 바탕으로 plan을 재구성해 텍스트
 경로와 **완전히 동일한** 결정적 엔진(동일한 이동/백업/심볼릭, 동일한 `--force` 가드)을 호출한다.
@@ -227,9 +237,10 @@ ssoty adopt --apply && ssoty init && ssoty sync   # 전체 라이프사이클
 발산 집합에서 단일 `common/<name>`을 절대 쓰지 않는다. 하네스별 **엔트리포인트**
 (`CLAUDE.md`/`AGENTS.md`/`GEMINI.md`/…)는 통합 대상에서 제외된다(각 하네스가 자기 복사본을 소유) —
 그대로 둔다. 안전 계약은 `fix`/`sync`와 동일: **기본 preview**, `--apply`는 모든 이동/교체 노드를
-변경 *전에* `.ssoty-backup/<timestamp>/`로 백업, 목적지는 루트 하위로 검증(루트를 벗어나는
-`--canonical-dir`은 쓰기 전에 거부, exit 2), idempotent(재실행 시 이미 링크된 원본과 동일 내용 쓰기를
-건너뜀), 내용이 다른 정규 목적지를 덮어쓸 때만 `--force` 필요.
+변경 *전에* `.ssoty-backup/<timestamp>/`로 백업, canonical home은 신뢰된 위치라 스캔 루트 밖에 있어도
+되며 엔진이 생성하는 목적지(`common/<name>` / `<harness>/<name>`)에는 `..`가 없어 home을 벗어나지 않음,
+idempotent(재실행 시 이미 링크된 원본과 동일 내용 쓰기를 건너뜀), 내용이 다른 정규 목적지를 덮어쓸 때만
+`--force` 필요.
 
 ### Add — 정규 SSOT에 새 룰 하나 추가
 정규 소스가 생긴 뒤에는 `ssoty add`로 새 룰 하나를 올바른 위치에 넣어 정확히 전파시킨다:

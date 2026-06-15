@@ -23,7 +23,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from ssoty import __version__
+from ssoty import __version__, config
 from ssoty.adopt import (
     PLACE_COMMON,
     PLACE_HARNESS,
@@ -261,7 +261,7 @@ def cmd_adopt(args: argparse.Namespace) -> int:
         plan = build_adopt_plan(
             root,
             surfaces,
-            canonical_dir=args.canonical_dir,
+            canonical_dir=args.canonical_dir or str(args.home),
             symlink_originals=not args.no_symlink_originals,
         )
     except ManifestError as exc:
@@ -348,6 +348,12 @@ def cmd_add(args: argparse.Namespace) -> int:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ssoty", description="Static cross-harness rule coherence auditor.")
     parser.add_argument("--version", action="version", version=f"ssoty {__version__}")
+    parser.add_argument(
+        "--home",
+        metavar="PATH",
+        help="canonical SSOT home (where adopt consolidates rules; default: persisted choice, "
+        "else ~/.ssoty). Passing it persists the choice to ~/.config/ssoty/config.json.",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     audit = sub.add_parser("audit", help="report coherence findings")
@@ -463,6 +469,19 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+    # Resolve the canonical home once, before dispatch. An explicit --home both wins and is
+    # persisted; otherwise resolution reads config.json (or the ~/.ssoty default) and writes
+    # nothing. Replace the raw string on args with the resolved Path for command funcs.
+    explicit_home = getattr(args, "home", None)
+    home = config.resolve_home(explicit_home)
+    if explicit_home:
+        try:
+            config.save_home(home)
+        except OSError as exc:
+            # Persistence is best-effort: a write failure (e.g. unwritable config dir) must not
+            # crash the command — the resolved home is still used for this run.
+            print(f"ssoty: warning: could not persist --home ({exc})", file=sys.stderr)
+    args.home = home
     return args.func(args)
 
 
